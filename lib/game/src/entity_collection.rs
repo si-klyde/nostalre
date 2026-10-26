@@ -13,6 +13,25 @@ const NO_DAMAGE_SKILL_EXEC_SECS: f32 = 0.6;
 /// How far an NPC answers from: rAthena's `area_size` (14) and one, each way
 pub const TALK_RANGE: u16 = 15;
 
+/// How many cells nearer a monster counts for a pad's lock (`best_monster`): the player's priority type on the
+/// map, hitting the player, coming for it, attacking from afar. They add up.
+pub struct LockBonus {
+    pub priority: u16,
+    pub hitting: u16,
+    pub targeting: u16,
+    pub ranged: u16,
+}
+
+pub const LOCK_BONUS: LockBonus = LockBonus {
+    priority: 16,
+    hitting: 12,
+    targeting: 8,
+    ranged: 6,
+};
+
+/// A monster walking to a cell this close to the player is taken to be coming for it
+const LOCK_CHASE_CELLS: u16 = 2;
+
 pub struct EntityCollection {
     entities: HashMap<u32, Entity>,
     player_id: Option<u32>,
@@ -120,6 +139,63 @@ impl EntityCollection {
             .filter(|&(distance, _)| distance <= range)
             .min_by_key(|&(distance, e)| (distance, e.id))
             .map(|(_, e)| e)
+    }
+
+    /// A monster a pad's lock can hold: alive, not someone's pet, within `reach` cells each way of `from`
+    pub fn monster_in_reach(&self, id: u32, from: (u16, u16), reach: u16) -> bool {
+        self.get(id)
+            .is_some_and(|e| lockable_monster(e) && cell_distance(e, from) <= reach)
+    }
+
+    /// The monster a pad's lock goes to when it holds none, among those `monster_in_reach` accepts: the nearest,
+    /// counting the `LOCK_BONUS`es as cells nearer: a class in `priority` (the player's picks for this map), one
+    /// hitting the player or coming for it, one that attacks from afar. Ties go to the lower id, so the pick
+    /// holds from frame to frame
+    pub fn best_monster(&self, from: (u16, u16), reach: u16, priority: &[u16]) -> Option<u32> {
+        self.ranked_monsters(from, reach, priority).first().copied()
+    }
+
+    /// Every monster `best_monster` could pick, best first: what an aim-only X steps through
+    pub fn ranked_monsters(&self, from: (u16, u16), reach: u16, priority: &[u16]) -> Vec<u32> {
+        let mut ranked: Vec<(i32, u32)> = self
+            .iter()
+            .filter(|e| lockable_monster(e))
+            .map(|e| (cell_distance(e, from), e))
+            .filter(|&(distance, _)| distance <= reach)
+            .map(|(distance, e)| {
+                let mut bonus = self.threat_bonus(e, from);
+                if priority.contains(&e.job) {
+                    bonus += LOCK_BONUS.priority;
+                }
+                if crate::mob_tables::ranged_attack_range(e.job).is_some() {
+                    bonus += LOCK_BONUS.ranged;
+                }
+                (distance as i32 - bonus as i32, e.id)
+            })
+            .collect();
+        ranked.sort_unstable();
+        ranked.into_iter().map(|(_, id)| id).collect()
+    }
+
+    /// `LOCK_BONUS` for what `e` is doing to the player standing on `from`. The server never says whom a monster
+    /// chases, so "coming for it" is read off a cast aimed at the player or a walk ending next to it.
+    fn threat_bonus(&self, e: &Entity, from: (u16, u16)) -> u16 {
+        let Some(me) = self.player_id else {
+            return 0;
+        };
+        if e.target_gid == Some(me) {
+            return LOCK_BONUS.hitting;
+        }
+        let casting_at_me = e.state() == EntityState::Casting && e.cast_target_gid == Some(me);
+        let walking_to_me = e.movement.is_moving()
+            && e.movement.destination().is_some_and(|(x, y)| {
+                x.abs_diff(from.0).max(y.abs_diff(from.1)) <= LOCK_CHASE_CELLS
+            });
+        if casting_at_me || walking_to_me {
+            LOCK_BONUS.targeting
+        } else {
+            0
+        }
     }
 
     pub fn clear(&mut self) {
@@ -392,6 +468,16 @@ impl EntityCollection {
     }
 }
 
+fn lockable_monster(e: &Entity) -> bool {
+    e.entity_type == EntityType::Monster && !e.is_pet && e.is_alive()
+}
+
+/// Cells each way from `from` to `e`: Chebyshev, how RO measures range
+fn cell_distance(e: &Entity, from: (u16, u16)) -> u16 {
+    let (x, y) = e.movement.cell_position();
+    x.abs_diff(from.0).max(y.abs_diff(from.1))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -448,6 +534,96 @@ mod tests {
 
         entities.insert(npc_at(5, 86, 102, 97));
         assert_eq!(pick(&entities, 15), Some(3), "a tie goes to the lower id");
+    }
+
+    fn monster_at(id: u32, x: u16, y: u16) -> Entity {
+        let mut e = npc_at(id, 1002, x, y);
+        e.entity_type = EntityType::Monster;
+        e
+    }
+
+    #[test]
+    fn best_monster_skips_pets_the_dead_and_far_ones() {
+        let mut entities = EntityCollection::new();
+        let mut pet = monster_at(1, 100, 101);
+        pet.is_pet = true;
+        entities.insert(pet);
+        let mut dead = monster_at(2, 101, 100);
+        dead.set_state(EntityState::Dead);
+        entities.insert(dead);
+        entities.insert(npc_at(3, 86, 99, 99));
+        entities.insert(monster_at(4, 103, 98));
+        entities.insert(monster_at(5, 130, 100));
+
+        assert_eq!(entities.best_monster((100, 100), 20, &[]), Some(4));
+        assert_eq!(entities.best_monster((100, 100), 2, &[]), None, "4 is 3 cells off");
+        entities.insert(monster_at(6, 97, 102));
+        assert_eq!(
+            entities.best_monster((100, 100), 20, &[]),
+            Some(4),
+            "a tie goes to the lower id"
+        );
+        assert_eq!(entities.ranked_monsters((100, 100), 20, &[]), vec![4, 6], "best first, then the next");
+
+        assert!(entities.monster_in_reach(4, (100, 100), 3));
+        assert!(!entities.monster_in_reach(4, (100, 100), 2));
+        assert!(!entities.monster_in_reach(1, (100, 100), 20), "a pet holds no lock");
+        assert!(!entities.monster_in_reach(2, (100, 100), 20), "nor the dead");
+        assert!(!entities.monster_in_reach(99, (100, 100), 20), "nor one gone");
+    }
+
+    #[test]
+    fn best_monster_prefers_one_hitting_or_casting_at_the_player() {
+        let mut entities = EntityCollection::new();
+        entities.insert(make_entity(9));
+        entities.set_player_id(9);
+        entities.insert(monster_at(1, 101, 100));
+        let mut hitter = monster_at(2, 109, 100);
+        hitter.target_gid = Some(9);
+        entities.insert(hitter);
+        let mut caster = monster_at(3, 106, 100);
+        caster.set_state(EntityState::Casting);
+        caster.cast_target_gid = Some(9);
+        entities.insert(caster);
+
+        assert_eq!(
+            entities.best_monster((100, 100), 20, &[]),
+            Some(2),
+            "9 cells off but hitting (9 - 12), ahead of the caster (6 - 8) and the idle one (1)"
+        );
+        entities.get_mut(2).unwrap().target_gid = Some(1234);
+        assert_eq!(
+            entities.best_monster((100, 100), 20, &[]),
+            Some(3),
+            "hitting someone else counts for nothing"
+        );
+        entities.get_mut(3).unwrap().set_state(EntityState::Standing);
+        assert_eq!(entities.best_monster((100, 100), 20, &[]), Some(1), "the cast is over");
+    }
+
+    #[test]
+    fn best_monster_counts_priority_types_and_ranged_monsters() {
+        let mut entities = EntityCollection::new();
+        entities.insert(monster_at(1, 101, 100));
+        let mut archer = monster_at(2, 106, 100);
+        archer.job = 1016; // Archer Skeleton, attack range 9
+        entities.insert(archer);
+        assert_eq!(crate::mob_tables::ranged_attack_range(1016), Some(9));
+        assert_eq!(crate::mob_tables::ranged_attack_range(1002), None, "a Poring hits from next to you");
+
+        assert_eq!(
+            entities.best_monster((100, 100), 20, &[]),
+            Some(2),
+            "6 cells off but ranged (6 - 6), ahead of the Poring a cell off"
+        );
+        let mut far = monster_at(3, 115, 100);
+        far.job = 1031;
+        entities.insert(far);
+        assert_eq!(
+            entities.best_monster((100, 100), 20, &[1031]),
+            Some(3),
+            "15 cells off, but the player's priority type here (15 - 16)"
+        );
     }
 
     fn make_entity(id: u32) -> Entity {

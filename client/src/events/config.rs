@@ -32,6 +32,7 @@ fn settings_values(config: &Config) -> SettingsValues {
         hud: config.hud_layout,
         keys: config.keybindings.clone(),
         chat_lines: config.shortcut_commands.clone(),
+        aim_attack: config.aim.x_attacks,
     }
 }
 

@@ -14,6 +14,8 @@
 //! equip ITEM_ID       wear the first such item in the inventory where it goes
 //! attack              attack the nearest monster, repeatedly, as a click on it does
 //! talk                talk to the nearest NPC in reach, as a click on it does
+//! pad BUTTON...       press and let go controller buttons together (a, b, x, y, select), as the pad does:
+//!                     `pad select x` is Select+X
 //! hotkey ACTION       the window a hotkey opens, by its action name (`ToggleStatus`, `ToggleBasicInfo`...), as
 //!                     the classic layout opens it whatever the HUD
 //! menu ACTION         the hotkey as the player presses it: with the frameless HUD, the menu's screen for it
@@ -68,6 +70,7 @@ enum Step {
     Equip(u32),
     Attack,
     Talk,
+    Pad(Vec<crate::input::gamepad::Button>),
     /// The action's window, as the classic layout opens it
     Hotkey(nostalre_game::keybinding::HotkeyAction),
     /// The action's key as the player presses it: the frameless HUD's menu screen for it
@@ -132,6 +135,7 @@ impl Step {
                 | Step::Equip(_)
                 | Step::Attack
                 | Step::Talk
+                | Step::Pad(_)
                 | Step::Hotkey(_)
                 | Step::Skill(..)
                 | Step::SkillAt(..)
@@ -201,6 +205,21 @@ fn parse(text: &str) -> Result<Vec<Step>, String> {
             ),
             "attack" => Step::Attack,
             "talk" => Step::Talk,
+            "pad" => {
+                use crate::input::gamepad::Button;
+                let buttons = rest
+                    .split_whitespace()
+                    .map(|name| match name {
+                        "a" => Ok(Button::A),
+                        "b" => Ok(Button::B),
+                        "x" => Ok(Button::X),
+                        "y" => Ok(Button::Y),
+                        "select" => Ok(Button::Select),
+                        _ => Err(format!("line {}: unknown pad button {name:?}", n + 1)),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Step::Pad(buttons)
+            }
             "hotkey" | "menu" => {
                 let action = serde_json::from_value(serde_json::Value::String(rest.to_string()))
                     .map_err(|_| format!("line {}: unknown hotkey action {rest}", n + 1))?;
@@ -596,6 +615,11 @@ impl App {
                 Some(gid) => self.initiate_attack(gid),
                 None => tracing::warn!("script: no monster to attack"),
             },
+            Step::Pad(buttons) => {
+                for button in buttons {
+                    self.gamepad.tap(button);
+                }
+            }
             // the controller's and the touch Talk's pick: in reach, no warp portal
             Step::Talk => {
                 if !self.talk_to_nearest_npc() {

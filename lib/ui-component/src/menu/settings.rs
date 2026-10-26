@@ -34,6 +34,8 @@ pub struct SettingsValues {
     pub keys: KeyBindings,
     /// Alt+1 to Alt+0
     pub chat_lines: Vec<String>,
+    /// X (aim assist) also attacks what it locks
+    pub aim_attack: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +61,7 @@ enum Opt {
     SnapMonster,
     SnapSkill,
     SnapItem,
+    AimAttack,
     Music,
     Effects,
     Stereo,
@@ -71,6 +74,7 @@ enum Group {
     Graphics,
     Hud,
     Sound,
+    Aim,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +111,7 @@ impl Opt {
             Self::SnapMonster => "To monsters",
             Self::SnapSkill => "To monsters, skill ready",
             Self::SnapItem => "To items",
+            Self::AimAttack => "X attacks",
             Self::Music => "Music",
             Self::Effects => "Effects",
             Self::Stereo => "Stereo",
@@ -139,6 +144,9 @@ impl Opt {
             Self::SnapMonster => "The cursor jumps to a monster near it.",
             Self::SnapSkill => "The same, only while a skill waits for a target.",
             Self::SnapItem => "The cursor jumps to an item on the ground.",
+            Self::AimAttack => {
+                "X locks a monster and attacks it. Off: X only aims, again the next; your skills cast on the lock."
+            }
             Self::Music => "Background music.",
             Self::Effects => "Skills, hits and the interface.",
             Self::Stereo => "Sounds pan with where they happen.",
@@ -158,6 +166,7 @@ impl Opt {
     fn group(self) -> Group {
         match self {
             Self::Hud => Group::Hud,
+            Self::AimAttack => Group::Aim,
             Self::Music | Self::Effects | Self::Stereo | Self::Background => Group::Sound,
             _ => Group::Graphics,
         }
@@ -191,6 +200,7 @@ impl Opt {
             Self::SnapMonster => &mut g.snap.monster_no_skill,
             Self::SnapSkill => &mut g.snap.monster_skill,
             Self::SnapItem => &mut g.snap.item,
+            Self::AimAttack => &mut v.aim_attack,
             Self::Stereo => &mut s.stereo,
             Self::Background => &mut s.play_when_unfocused,
             Self::Scale | Self::Hud | Self::Music | Self::Effects => return None,
@@ -400,6 +410,8 @@ impl Page {
                 O(Opt::SnapMonster),
                 O(Opt::SnapSkill),
                 O(Opt::SnapItem),
+                S("Aim assist"),
+                O(Opt::AimAttack),
             ],
             Self::Sound => &[
                 S("Volume"),
@@ -781,6 +793,11 @@ impl Settings {
         if sent(Group::Hud) {
             events.push(GameEvent::HudLayoutChanged { layout: now.hud });
         }
+        if sent(Group::Aim) {
+            events.push(GameEvent::AimSettingsChanged {
+                x_attacks: now.aim_attack,
+            });
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1108,6 +1125,15 @@ mod tests {
         assert!(Opt::NameNpc.change(&mut v, Change::Prev));
         assert!(v.graphics.display.hide_name_npc);
         assert!(!Opt::NameNpc.change(&mut v, Change::Prev));
+    }
+
+    #[test]
+    fn x_attacks_flips_and_sends_the_aim_event() {
+        let mut v = values();
+        assert!(matches!(Opt::AimAttack.shown_value(&mut v), Shown::Toggle(false)));
+        assert!(Opt::AimAttack.change(&mut v, Change::Flip));
+        assert!(v.aim_attack);
+        assert_eq!(Opt::AimAttack.group(), Group::Aim);
     }
 
     #[test]

@@ -3148,6 +3148,10 @@ impl App {
                 GameEvent::GraphicsSettingsChanged { settings, persist } => {
                     self.apply_graphics_settings(settings, persist);
                 }
+                GameEvent::AimSettingsChanged { x_attacks } => {
+                    self.config.aim.x_attacks = x_attacks;
+                    self.save_config_soon();
+                }
                 GameEvent::KeyBindingsChanged(keys) => self.apply_key_bindings(*keys),
                 GameEvent::ToggleHotkeyConfig => {
                     if !self.windows.hotkey_config_window.is_open() {

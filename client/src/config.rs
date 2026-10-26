@@ -423,6 +423,26 @@ impl Default for AccessibilityConfig {
     }
 }
 
+/// The pad's target lock (client/src/input/gamepad.rs)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AimConfig {
+    /// Monster classes the lock prefers, per map (its name without `.gat`): Select+X on a locked monster adds or
+    /// removes its class for the map the player is on
+    pub priority_monsters: HashMap<String, Vec<u16>>,
+    /// X also attacks the monster it locks; off: X only aims and the hotbar's skills cast on the lock
+    pub x_attacks: bool,
+}
+
+impl Default for AimConfig {
+    fn default() -> Self {
+        Self {
+            priority_monsters: HashMap::new(),
+            x_attacks: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoginServer {
     pub name: String,
@@ -514,6 +534,7 @@ pub struct Config {
     pub hud_layout: HudLayout,
     #[serde(default)]
     pub snap: MouseSnapPrefs,
+    pub aim: AimConfig,
     /// Slot of the character selected last, restored to preselect it (and its page)
     /// on the next character-select screen. Client-side only; the server sends no
     /// "last used" marker.
@@ -636,6 +657,7 @@ impl Default for Config {
             display: DisplayOptions::default(),
             hud_layout: HudLayout::default(),
             snap: MouseSnapPrefs::default(),
+            aim: AimConfig::default(),
             last_char_slot: None,
             map_recovery_command: default_map_recovery_command(),
             shortcut_commands: default_shortcut_commands(),

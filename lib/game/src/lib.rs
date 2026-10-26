@@ -56,6 +56,7 @@ pub mod map_cloud;
 pub mod map_loader;
 pub mod minimap_mark;
 pub mod mob_info;
+pub mod mob_tables;
 pub mod monster_info;
 pub mod movement;
 pub mod navigation;

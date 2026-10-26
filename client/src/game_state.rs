@@ -114,6 +114,8 @@ pub struct CombatState {
     pub queued_move: Option<(i32, i32)>,
     /// State the character was in when `queued_move` was taken.
     pub queued_move_state: Option<EntityState>,
+    /// The monster the pad's X attacks, marked on screen: kept while it lives and stays in reach.
+    pub locked_target: Option<u32>,
 }
 
 impl Default for CombatState {
@@ -128,6 +130,7 @@ impl CombatState {
             attack_target_id: None,
             last_attacked_enemy: None,
             attack_request_cooldown: 0.0,
+            locked_target: None,
             attack_range: 1,
             attack_is_locked: false,
             attack_request_sent: false,

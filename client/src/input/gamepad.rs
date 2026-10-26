@@ -1,5 +1,6 @@
 //! Game controllers, after roBrowser's JoystickUI: left stick walks, right stick moves the cursor, A/B are the
-//! mouse buttons, X attacks the closest monster, Y picks up the closest item or else talks to the nearest NPC (in
+//! mouse buttons, X locks the best monster in reach and attacks it (with Settings → Gameplay → "X attacks" off
+//! it only aims: again the next, and the hotbar's attack and ground skills cast on the lock), Y picks up the closest item or else talks to the nearest NPC (in
 //! a dialog A goes on and B cancels; in a shop A moves a line across, Start buys). L1, R1 or both held with a face
 //! button use a hotbar slot, in one of three sets (Select+L1/R1). The camera is ours (the design canvas,
 //! "Camera on controller and touch"): L2/R2 turn it, with Select held they tilt it, Select+Up/Down zooms, R3
@@ -20,7 +21,6 @@ use winit::window::WindowId;
 
 use crate::App;
 use nostalre_game::app_state::AppState;
-use nostalre_game::entity::EntityType;
 use nostalre_game::entity_collection::TALK_RANGE;
 use nostalre_game::hotkey::{PAD_SET_SLOTS, PAD_SETS};
 use nostalre_renderer::camera::CameraControl;
@@ -37,6 +37,9 @@ const WALK_REACH: f32 = 3.0;
 const WALK_REPEAT_FALLBACK: Duration = Duration::from_millis(150);
 /// Search radius, in cells, for X (monsters) and Y (floor items).
 const REACH_CELLS: i32 = 20;
+/// After a kill the lock moves on by itself only this far, about what the default camera shows around the
+/// player: a held lock does not drag the player across the map
+const RELOCK_CELLS: u16 = 9;
 /// The camera at full trigger: degrees turned or tilted a second; a light press goes slower (squared)
 const TURN_DEG_PER_SEC: f32 = 120.0;
 const TILT_DEG_PER_SEC: f32 = 30.0;
@@ -167,13 +170,18 @@ pub(crate) struct Gamepad {
     cursor: Option<(f32, f32)>,
     /// Pressed while the menu was open: the menu's keys, so their release is not a click.
     menu_presses: HashSet<Button>,
+    /// The lock moved on after a kill and waits to be attacked: the swing that killed holds the character, so
+    /// a walk to the next one starts once it may move
+    relock_pending: bool,
 }
 
 impl Gamepad {
-    /// A controller button: noted for the next frame. False for anything else (keyboards keep their keys).
+    /// A controller button: noted for the next frame. False for anything else (keyboards keep their keys), but
+    /// Tab, which is X on a keyboard: the lock's attack, also where no pad is read (the desktop).
     pub(crate) fn key(&mut self, event: &KeyEvent) -> bool {
         let button = match (&event.logical_key, event.physical_key) {
             (Key::Unidentified(NativeKey::Android(code)), _) => Button::from_android(*code),
+            (_, PhysicalKey::Code(KeyCode::Tab)) => Some(Button::X),
             (_, PhysicalKey::Code(code)) => self.arrow(code, event.state),
             _ => None,
         };
@@ -227,6 +235,12 @@ impl Gamepad {
             }
             _ => {}
         }
+    }
+
+    /// A press and its release, both seen next frame: a scripted button (`pad` in client/src/script.rs)
+    pub(crate) fn tap(&mut self, button: Button) {
+        self.press(button);
+        self.release(button);
     }
 
     fn press(&mut self, button: Button) {
@@ -308,6 +322,7 @@ impl App {
         self.gamepad_walk(now);
         self.gamepad_camera(dt);
         self.touch_actions();
+        self.relock_after_kill();
 
         let select = self.gamepad.select_down();
         let fresh = std::mem::take(&mut self.gamepad.fresh);
@@ -356,6 +371,7 @@ impl App {
                     self.gamepad.set = (self.gamepad.set + PAD_SETS - 1) % PAD_SETS;
                 }
                 Button::R1 if playing => self.gamepad.set = (self.gamepad.set + 1) % PAD_SETS,
+                Button::X if playing => self.toggle_priority_monster(),
                 _ => {}
             }
             return;
@@ -400,7 +416,8 @@ impl App {
                 MouseButton::Right,
                 ElementState::Pressed,
             ),
-            Button::X if in_game => self.attack_closest_monster(),
+            Button::X if in_game && self.config.aim.x_attacks => self.attack_locked_monster(),
+            Button::X if in_game => self.aim_next_monster(),
             Button::Y if in_game => {
                 if !self.pick_up_closest_item() {
                     self.talk_to_nearest_npc();
@@ -538,7 +555,7 @@ impl App {
         self.windows.hud.input.touch_slots.talk = talk;
         let touch = self.windows.hud.touch_input();
         if touch.attack {
-            self.attack_closest_monster();
+            self.attack_locked_monster();
         }
         if touch.talk {
             self.talk_to_nearest_npc();
@@ -665,23 +682,169 @@ impl App {
         }
     }
 
-    fn attack_closest_monster(&mut self) {
-        let Some(player) = self.game.world.entities.player() else {
+    /// The pad's locked monster while it can still be held (alive, in reach): what X attacks and the overlay
+    /// marks
+    pub(crate) fn locked_monster(&self) -> Option<u32> {
+        let entities = &self.game.world.entities;
+        let from = entities.player()?.movement.cell_position();
+        self.game
+            .combat
+            .locked_target
+            .filter(|&id| entities.monster_in_reach(id, from, REACH_CELLS as u16))
+    }
+
+    /// X: the locked monster, or else a new lock on the best one in reach (`best_monster`), attacked
+    fn attack_locked_monster(&mut self) {
+        let entities = &self.game.world.entities;
+        let Some(player) = entities.player() else {
             return;
         };
-        let (px, py) = player.movement.cell_position();
-        let closest = self
-            .game
-            .world
-            .entities
-            .iter()
-            .filter(|e| e.entity_type == EntityType::Monster && !e.is_pet && e.is_alive())
-            .map(|e| (e.id, cell_distance((px, py), e.movement.cell_position())))
-            .filter(|&(_, d)| d <= REACH_CELLS)
-            .min_by_key(|&(_, d)| d)
-            .map(|(id, _)| id);
-        if let Some(id) = closest {
+        let from = player.movement.cell_position();
+        let lock = self
+            .locked_monster()
+            .or_else(|| entities.best_monster(from, REACH_CELLS as u16, self.priority_monsters()));
+        if lock != self.game.combat.locked_target {
+            self.log_lock(lock, "X");
+        }
+        self.game.combat.locked_target = lock;
+        if let Some(id) = lock {
             self.initiate_attack(id);
+        }
+    }
+
+    /// X with "X attacks" off: aim, never attack (skills cast on the lock, events/skill.rs). With no lock the
+    /// best monster in reach (`ranked_monsters`) is locked, with one the next after it, round the list
+    fn aim_next_monster(&mut self) {
+        let entities = &self.game.world.entities;
+        let Some(player) = entities.player() else {
+            return;
+        };
+        let from = player.movement.cell_position();
+        let ranked = entities.ranked_monsters(from, REACH_CELLS as u16, self.priority_monsters());
+        let next = match self.locked_monster().and_then(|id| ranked.iter().position(|&r| r == id)) {
+            Some(i) => ranked.get((i + 1) % ranked.len()).copied(),
+            None => ranked.first().copied(),
+        };
+        if next != self.game.combat.locked_target {
+            self.log_lock(next, "X");
+        }
+        self.game.combat.locked_target = next;
+    }
+
+    /// The monster classes the lock prefers on this map (`AimConfig::priority_monsters`)
+    fn priority_monsters(&self) -> &[u16] {
+        self.game
+            .session
+            .current_map
+            .as_ref()
+            .and_then(|map| self.config.aim.priority_monsters.get(map))
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// Select+X: the locked monster's class becomes one the lock prefers on this map, or stops being one
+    fn toggle_priority_monster(&mut self) {
+        let Some(map) = self.game.session.current_map.clone() else {
+            return;
+        };
+        let Some(e) = self.locked_monster().and_then(|id| self.game.world.entities.get(id)) else {
+            self.windows
+                .chat_window
+                .add_system("Lock a monster with X first, then Select+X to prefer its kind here".to_string());
+            return;
+        };
+        let (class, name) = (e.job, e.name.clone().unwrap_or_else(|| format!("#{}", e.job)));
+        let classes = self.config.aim.priority_monsters.entry(map.clone()).or_default();
+        let preferred = if let Some(i) = classes.iter().position(|&c| c == class) {
+            classes.remove(i);
+            false
+        } else {
+            classes.push(class);
+            true
+        };
+        if classes.is_empty() {
+            self.config.aim.priority_monsters.remove(&map);
+        }
+        self.save_config_soon();
+        let status = if preferred { "preferred" } else { "no longer preferred" };
+        self.windows
+            .chat_window
+            .add_system(format!("{name}: {status} on {map}"));
+    }
+
+    /// A new lock, at debug level (RUST_LOG=nostalre_client::input::gamepad=debug): for tuning `LOCK_BONUS`
+    fn log_lock(&self, lock: Option<u32>, why: &str) {
+        let entities = &self.game.world.entities;
+        let Some(e) = lock.and_then(|id| entities.get(id)) else {
+            return;
+        };
+        let me = entities.player_id();
+        let (x, y) = e.movement.cell_position();
+        tracing::debug!(
+            "pad lock ({why}): {} class {} at {x},{y}, hitting me {}, casting at me {}",
+            e.id,
+            e.job,
+            me.is_some() && e.target_gid == me,
+            me.is_some() && e.cast_target_gid == me,
+        );
+    }
+
+    /// Each frame: a lock that can no longer be held is dropped, and when it was the monster we were attacking
+    /// and it died, the best one within `RELOCK_CELLS` is locked and attacked, as another X would, as soon as
+    /// the character may act (`relock_pending`). With "X attacks" off, whoever killed it, the new lock is only
+    /// aimed. One that walked out of reach or out of sight is only dropped.
+    fn relock_after_kill(&mut self) {
+        let Some(id) = self.game.combat.locked_target else {
+            self.gamepad.relock_pending = false;
+            return;
+        };
+        if self.locked_monster().is_some() {
+            if self.gamepad.relock_pending {
+                self.attack_relocked(id);
+            }
+            return;
+        }
+        self.game.combat.locked_target = None;
+        self.gamepad.relock_pending = false;
+        let entities = &self.game.world.entities;
+        let attacks = self.config.aim.x_attacks;
+        let killed = entities.get(id).is_some_and(|e| !e.is_alive())
+            && (!attacks || self.game.combat.last_attacked_enemy == Some(id));
+        let Some(player) = entities.player().filter(|p| p.is_alive()) else {
+            return;
+        };
+        if !killed || self.game.session.app_state != AppState::InGame {
+            return;
+        }
+        let from = player.movement.cell_position();
+        if let Some(next) = entities.best_monster(from, RELOCK_CELLS, self.priority_monsters()) {
+            self.log_lock(Some(next), "after a kill");
+            self.game.combat.locked_target = Some(next);
+            if attacks {
+                self.gamepad.relock_pending = true;
+                self.attack_relocked(next);
+            }
+        }
+    }
+
+    /// The lock's attack after a kill, again each frame until it starts; given up as soon as the player walks
+    /// or attacks something else (a click, a queued move), so it never fights the player's own hand
+    fn attack_relocked(&mut self, id: u32) {
+        let combat = &self.game.combat;
+        let own_move = combat.queued_move.is_some()
+            || self
+                .game
+                .world
+                .entities
+                .player()
+                .is_some_and(|p| p.movement.is_moving() && combat.attack_target_id.is_none());
+        let other_target = combat.attack_target_id.is_some_and(|t| t != id);
+        if own_move || other_target {
+            self.gamepad.relock_pending = false;
+            return;
+        }
+        self.initiate_attack(id);
+        if self.game.combat.attack_target_id == Some(id) {
+            self.gamepad.relock_pending = false;
         }
     }
 

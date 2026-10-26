@@ -93,6 +93,18 @@ have no toggle.
 | `snap.monster_skill` | Snap to monsters while an entity-targeted skill waits for its click. | `true` | No |
 | `snap.item` | Snap to floor items. | `false` | No |
 
+## aim
+
+The controller's target lock: X (Tab on a keyboard) attacks the locked monster, or locks the best one in reach,
+and the lock moves on by itself after a kill. With `aim.x_attacks` off, X only aims: it locks the best monster,
+pressed again the next one, and the hotbar's attack and ground skills cast on the lock. Select+X on the locked monster adds its kind to the map's
+preferred ones, or takes it off.
+
+| Config key | Description | Default value | Mandatory |
+| --- | --- | --- | --- |
+| `aim.x_attacks` | X also attacks the monster it locks. Off: X only aims. Settings → Gameplay → Aim assist → X attacks. | `true` | No |
+| `aim.priority_monsters` | Monster classes the lock prefers, per map name: `{"prt_fild08": [1002]}`. | `{}` | No |
+
 ## debug
 
 | Config key | Description | Default value | Mandatory |

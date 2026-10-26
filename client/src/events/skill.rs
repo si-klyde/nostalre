@@ -1200,7 +1200,22 @@ impl App {
             .resolve_cast_skill(skill)
             .map(|(target_type, _)| target_type)
             .unwrap_or(SkillTargetType::Target);
+        // the pad's lock (client/src/input/gamepad.rs) takes an attack skill at once, and a ground skill on its
+        // cell, where a mouse would wait for the click
+        let lock = self.locked_monster();
+        let lock_cell = lock
+            .and_then(|id| self.game.world.entities.get(id))
+            .map(|e| e.movement.cell_position());
         match skill_target_type {
+            SkillTargetType::Target if let Some(target) = lock => {
+                if self.cast_skill_on_unit(skill, level, target) {
+                    self.game.combat.attack_target_id = None;
+                }
+            }
+            SkillTargetType::Ground if let Some((x, y)) = lock_cell => {
+                self.cast_skill_on_cell(skill, level, x as i16, y as i16);
+                self.game.combat.attack_target_id = None;
+            }
             SkillTargetType::MySelf => {
                 if !respect_cooldown || !self.skill_on_cooldown(skill) {
                     let target_id = self.game.world.entities.player_id().unwrap_or(0);

@@ -1289,6 +1289,10 @@ pub enum GameEvent {
         settings: crate::display::GraphicsSettings,
         persist: bool,
     },
+    /// Settings → Gameplay → Aim assist: X also attacks what it locks
+    AimSettingsChanged {
+        x_attacks: bool,
+    },
     SoundEffect {
         name: String,
         act: u8,

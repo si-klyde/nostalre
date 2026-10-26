@@ -92,6 +92,11 @@ impl App {
         self.build_npc_cutins(&mut calls);
         self.build_sign_boards(render_list, &mut calls);
         self.build_hovered_entity_overlay(hovered_entity_id, render_list, &mut calls);
+        let locked = self.locked_monster();
+        if locked != hovered_entity_id {
+            self.build_hovered_entity_overlay(locked, render_list, &mut calls);
+        }
+        build_lock_marker(locked, render_list, &mut calls);
         self.build_guild_emblems(render_list, &mut calls);
         self.build_player_bars(hovered_entity_id, render_list, &mut calls);
         self.build_persistent_bars(hovered_entity_id, render_list, &mut calls);
@@ -947,6 +952,40 @@ fn hp_bar_style(accessibility: &AccessibilityConfig, entity_type: EntityType) ->
     match entity_type {
         EntityType::Monster => &accessibility.monster_hp_bar,
         _ => &accessibility.hp_bar,
+    }
+}
+
+/// The pad's lock: a gold arrow pointing down at the monster's head, drawn as rows narrowing to the tip,
+/// each over a dark outline
+fn build_lock_marker(locked: Option<u32>, render_list: &[RenderEntry], calls: &mut Vec<UiDrawCall>) {
+    const GOLD: [f32; 4] = [1.0, 0.82, 0.2, 1.0];
+    const OUTLINE: [f32; 4] = [0.1, 0.07, 0.0, 0.85];
+    const ROW_WIDTHS: [f32; 4] = [16.0, 12.0, 8.0, 4.0];
+    const ROW_HEIGHT: f32 = 3.0;
+    const GAP: f32 = 6.0;
+    let Some(entry) = locked.and_then(|id| render_list.iter().find(|e| e.id == id)) else {
+        return;
+    };
+    let center_x = entry.screen_anchor[0];
+    let tip_y = entry.pick_bounds[1] - GAP;
+    let top_y = tip_y - ROW_HEIGHT * ROW_WIDTHS.len() as f32;
+    for (outline, color) in [(1.0, OUTLINE), (0.0, GOLD)] {
+        for (i, width) in ROW_WIDTHS.into_iter().enumerate() {
+            let w = width + 2.0 * outline;
+            let y = top_y + ROW_HEIGHT * i as f32 - outline;
+            let (vertices, indices) = nostalre_ui::draw::quad_vertices(
+                center_x - w / 2.0,
+                y,
+                w,
+                ROW_HEIGHT + 2.0 * outline,
+                color,
+            );
+            calls.push(UiDrawCall {
+                vertices: vertices.into(),
+                indices: indices.into(),
+                texture: UiTextureRef::White,
+            });
+        }
     }
 }
 
