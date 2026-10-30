@@ -19,10 +19,15 @@ use winit::keyboard::{Key, KeyCode, NativeKey, PhysicalKey};
 use winit::window::WindowId;
 
 use crate::App;
+use nostalre_game::aim::{
+    AimInput, AimTarget, aim_candidate, aim_dir, aim_target, buff_candidate, buff_target,
+};
 use nostalre_game::app_state::AppState;
+use nostalre_game::cursor::PendingSkillTarget;
 use nostalre_game::entity::EntityType;
 use nostalre_game::entity_collection::TALK_RANGE;
 use nostalre_game::hotkey::{PAD_SET_SLOTS, PAD_SETS};
+use nostalre_game::targeting::{TargetClass, revives_corpse, skill_target_class};
 use nostalre_renderer::camera::CameraControl;
 
 /// Stick values within this are rest (roBrowser joyDeadline).
@@ -167,6 +172,18 @@ pub(crate) struct Gamepad {
     cursor: Option<(f32, f32)>,
     /// Pressed while the menu was open: the menu's keys, so their release is not a click.
     menu_presses: HashSet<Button>,
+    /// A hotbar press from the pad may have armed a skill: aim it with the right stick once it waits
+    aim_armed: bool,
+    /// The waiting skill the pad armed; one armed some other way (a keyboard hotkey) is not aimed
+    aim_for: Option<PendingSkillTarget>,
+    /// Aim mode's target this frame; `None` when not aiming
+    aim: Option<AimTarget>,
+    /// The last way the right stick aimed, kept while it rests
+    aim_dir: Option<(f32, f32)>,
+    /// Reused each frame for the aimable actors
+    aim_candidates: Vec<(u32, (f32, f32))>,
+    /// The party member (or the player) buffs aimed from the pad go to; kept across casts, cleared on a map change
+    buff_lock: Option<u32>,
 }
 
 impl Gamepad {
@@ -255,6 +272,14 @@ impl Gamepad {
         self.held.contains(&Button::Select) || self.released.contains(&Button::Select)
     }
 
+    pub(crate) fn aim_target(&self) -> Option<AimTarget> {
+        self.aim
+    }
+
+    pub(crate) fn clear_buff_lock(&mut self) {
+        self.buff_lock = None;
+    }
+
     fn stick(&self, x: u32, y: u32) -> (f32, f32) {
         (dead(self.axes[x as usize]), dead(self.axes[y as usize]))
     }
@@ -304,6 +329,7 @@ impl App {
             .map_or(0.0, |t| now.duration_since(t).as_secs_f32().min(0.1));
         self.gamepad.last_frame = Some(now);
 
+        self.gamepad_aim();
         self.gamepad_cursor(event_loop, window, dt);
         self.gamepad_walk(now);
         self.gamepad_camera(dt);
@@ -388,7 +414,16 @@ impl App {
             Button::Right => self.with_ui(|ui| ui.key_right = true),
             Button::A | Button::B | Button::X | Button::Y if group.is_some() => {
                 if let Some(slot) = group.and_then(|g| hotbar_slot(g, button, self.gamepad.set)) {
+                    self.gamepad.aim_armed = true;
                     self.use_hotbar_slot(slot);
+                }
+            }
+            // aiming: A casts at the aimed target, whatever the frozen cursor is over; with none the skill
+            // stays armed to aim again
+            Button::A if in_game && self.gamepad.aim.is_some() => {
+                self.gamepad.menu_presses.insert(button);
+                if self.gamepad.aim != Some(AimTarget::Nothing) {
+                    self.handle_left_click();
                 }
             }
             Button::A => {
@@ -552,10 +587,117 @@ impl App {
         }
     }
 
-    /// Right stick: the cursor, as if the mouse moved (the UI and the world both see it).
+    /// Aim mode (`nostalre_game::aim`): while an offensive or ground skill armed from the pad waits for its
+    /// target, the right stick aims a cone from the player instead of moving the cursor (the enemy most on aim,
+    /// held until clearly off), and Y steps a melee
+    /// skill to the next enemy. A buff goes to the locked party member, Y steps the lock. A casts
+    /// (`gamepad_press`), B cancels as a right click does.
+    fn gamepad_aim(&mut self) {
+        let pending = self.game.pending_casts.pending_skill_target;
+        // the press was last frame; the skill it armed waits now
+        if std::mem::take(&mut self.gamepad.aim_armed) {
+            self.gamepad.aim_for = pending;
+        }
+        let class = match pending {
+            Some(PendingSkillTarget::Ground { .. }) => Some(TargetClass::Ground),
+            Some(PendingSkillTarget::Entity { skill, .. }) => self
+                .game
+                .resolve_cast_skill(skill)
+                .map(|(target_type, _)| skill_target_class(target_type))
+                .filter(|&class| matches!(class, TargetClass::Offensive | TargetClass::Supportive)),
+            _ => None,
+        };
+        let (Some(class), Some(pending)) =
+            (class, pending.filter(|&p| self.gamepad.aim_for == Some(p)))
+        else {
+            self.gamepad.aim_for = None;
+            self.gamepad.aim = None;
+            self.gamepad.aim_dir = None;
+            return;
+        };
+        let entities = &self.game.world.entities;
+        let Some(player) = entities.player() else {
+            return;
+        };
+        let origin = player.movement.cell_position();
+        let stick = self.gamepad.stick(axis::Z, axis::RZ);
+        let stick_tilted = stick != (0.0, 0.0);
+        let yaw = self.renderer.as_ref().map_or(0.0, |r| r.camera.yaw);
+        let dir = aim_dir(stick, yaw, self.gamepad.aim_dir, player.direction);
+        if stick_tilted {
+            self.gamepad.aim_dir = Some(dir);
+        }
+        // a bare Y steps the target; with a shoulder it is still a hotbar slot, in the menu a menu key
+        let cycle = self.gamepad.group().is_none()
+            && !self.windows.menu.is_open()
+            && self.gamepad.fresh.contains(&Button::Y);
+        if cycle {
+            self.gamepad.fresh.retain(|&b| b != Button::Y);
+        }
+        let range = self
+            .game
+            .resolve_cast_skill(pending.skill())
+            .map_or(1, |(_, range)| range as i32);
+        let player_id = entities.player_id();
+
+        if class == TargetClass::Supportive {
+            // buffs take the locked party member while in reach, else the caster (Resurrection the nearest
+            // corpse); Y moves the lock
+            let party = self.game.party.as_ref();
+            let revives = revives_corpse(pending.skill());
+            let in_party = |id| {
+                let aid = entities.account_id_of(id);
+                party.is_some_and(|p| p.members.iter().any(|m| m.aid == aid))
+            };
+            let allies: Vec<(u32, i32)> = entities
+                .iter()
+                .filter(|e| {
+                    Some(e.id) != player_id
+                        && buff_candidate(e, in_party(e.id), origin, range, revives)
+                })
+                .map(|e| (e.id, cell_distance(origin, e.movement.cell_position())))
+                .collect();
+            let caster = (!revives).then_some(player.id);
+            let target = buff_target(caster, self.gamepad.buff_lock, cycle, &allies);
+            if cycle {
+                self.gamepad.buff_lock = target;
+            }
+            self.gamepad.aim = Some(target.map_or(AimTarget::Nothing, AimTarget::Ally));
+            return;
+        }
+
+        let map = &self.game.session.map_properties;
+        let mut candidates = std::mem::take(&mut self.gamepad.aim_candidates);
+        candidates.clear();
+        candidates.extend(
+            entities
+                .iter()
+                .filter(|e| aim_candidate(e, class, map, player_id))
+                .map(|e| (e.id, e.movement.position())),
+        );
+        let current = match self.gamepad.aim {
+            Some(AimTarget::Entity(id)) => Some(id),
+            _ => None,
+        };
+        let input = AimInput {
+            origin: player.movement.position(),
+            dir,
+            range,
+            stick_tilted,
+            cycle,
+            current,
+            candidates: &candidates,
+        };
+        let gat = self.game.session.gat.as_ref();
+        let blocked = |x, y| gat.is_some_and(|g| !g.is_shootable(x, y));
+        self.gamepad.aim = Some(aim_target(class, &input, blocked));
+        self.gamepad.aim_candidates = candidates;
+    }
+
+    /// Right stick: the cursor, as if the mouse moved (the UI and the world both see it). Frozen in aim mode.
     fn gamepad_cursor(&mut self, event_loop: &ActiveEventLoop, window: WindowId, dt: f32) {
         let (x, y) = self.gamepad.stick(axis::Z, axis::RZ);
-        if x == 0.0 && y == 0.0 {
+        if (x == 0.0 && y == 0.0) || self.gamepad.aim.is_some() {
             self.gamepad.cursor = None;
             return;
         }

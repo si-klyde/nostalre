@@ -1,5 +1,6 @@
 use crate::App;
 use crate::game_state::{HoverState, attackable_unit_at};
+use nostalre_game::aim::AimTarget;
 use nostalre_game::app_state::AppState;
 use nostalre_game::cursor::{
     CompanionSkillTarget, CursorType, PendingSkillTarget, RenderEntry, cursor_type_for_cell,
@@ -192,6 +193,25 @@ impl App {
                         && my <= entry.pick_bounds[3]
                 })
                 .map(|entry| entry.id);
+        }
+
+        // Pad aim mode: the aimed target stands in for whatever the frozen cursor is over
+        if let Some(aim) = self.gamepad.aim_target() {
+            hover = HoverState {
+                hovered_player_id: hover.hovered_player_id,
+                hovered_self_id: hover.hovered_self_id,
+                cell_cursor: hover.cell_cursor,
+                ..HoverState::default()
+            };
+            let aimed = match aim {
+                AimTarget::Entity(id) => Some((id, CursorType::Attack)),
+                AimTarget::Ally(id) => Some((id, CursorType::Lock)),
+                AimTarget::Cell(_) | AimTarget::Nothing => None,
+            };
+            if let Some((id, cursor)) = aimed {
+                hover.hovered_entity_id = Some(id);
+                hover.hovered_entity_cursor = Some(cursor);
+            }
         }
 
         hover
