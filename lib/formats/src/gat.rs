@@ -106,6 +106,14 @@ impl GatFile {
         self.cells[(y * self.width + x) as usize].is_walkable()
     }
 
+    /// Whether a projectile passes the cell; off the map is a wall.
+    pub fn is_shootable(&self, x: i32, y: i32) -> bool {
+        if x < 0 || y < 0 || x >= self.width || y >= self.height {
+            return false;
+        }
+        self.cells[(y * self.width + x) as usize].is_shootable()
+    }
+
     /// Replaces a cell's terrain flags from a raw GAT cell type, as the server sends
     /// on Ice Wall and script cell changes.
     pub fn set_cell_type(&mut self, x: i32, y: i32, raw_type: i32) -> bool {

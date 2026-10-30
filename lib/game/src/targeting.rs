@@ -234,6 +234,101 @@ pub fn skill_target_allowed(
     }
 }
 
+/// How far beside an aim ray, in cells, an actor still counts as on it.
+pub const HIT_RADIUS: f32 = 0.75;
+/// Actors this close along the ray count as level: the one nearer the aim wins.
+const TIE_BAND: f32 = 0.5;
+/// Ray sampling step for walls, in cells.
+const WALL_STEP: f32 = 0.25;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RayHit {
+    Entity {
+        id: u32,
+        cell: (u16, u16),
+    },
+    /// Nothing hit: the last open cell the ray reached.
+    Cell((i32, i32)),
+}
+
+/// The first of `candidates` an aim ray from `origin` along `dir` (map space) meets within `range` cells
+/// (Chebyshev, as RO measures it), stopping at the first `blocked` cell; else where the ray ends.
+pub fn ray_pick(
+    origin: (u16, u16),
+    dir: (f32, f32),
+    range: i32,
+    candidates: impl IntoIterator<Item = (u32, (u16, u16))>,
+    blocked: impl Fn(i32, i32) -> bool,
+) -> RayHit {
+    let len = (dir.0 * dir.0 + dir.1 * dir.1).sqrt();
+    let (dx, dy) = if len > f32::EPSILON {
+        (dir.0 / len, dir.1 / len)
+    } else {
+        (0.0, 1.0)
+    };
+    let (ox, oy) = (i32::from(origin.0), i32::from(origin.1));
+    // along-ray distance at which the Chebyshev range runs out
+    let max_t = range.max(0) as f32 / dx.abs().max(dy.abs());
+
+    let mut end = (ox, oy);
+    let mut wall_t = f32::INFINITY;
+    let steps = (max_t / WALL_STEP).ceil() as i32;
+    for i in 1..=steps {
+        let s = (i as f32 * WALL_STEP).min(max_t);
+        let cell = (
+            (ox as f32 + dx * s).round() as i32,
+            (oy as f32 + dy * s).round() as i32,
+        );
+        if blocked(cell.0, cell.1) {
+            wall_t = s;
+            break;
+        }
+        if (cell.0 - ox).abs().max((cell.1 - oy).abs()) <= range {
+            end = cell;
+        }
+    }
+
+    let mut hits: Vec<(u32, (u16, u16), f32, f32)> = Vec::new();
+    for (id, cell) in candidates {
+        let (rx, ry) = (i32::from(cell.0) - ox, i32::from(cell.1) - oy);
+        if rx.abs().max(ry.abs()) > range {
+            continue;
+        }
+        let (rx, ry) = (rx as f32, ry as f32);
+        let t = rx * dx + ry * dy;
+        let d = (rx * dy - ry * dx).abs();
+        if t > 0.0 && t < wall_t && d <= HIT_RADIUS {
+            hits.push((id, cell, t, d));
+        }
+    }
+    let Some(nearest) = hits.iter().map(|h| h.2).reduce(f32::min) else {
+        return RayHit::Cell(end);
+    };
+    hits.iter()
+        .filter(|h| h.2 <= nearest + TIE_BAND)
+        .min_by(|a, b| a.3.total_cmp(&b.3))
+        .map_or(RayHit::Cell(end), |&(id, cell, ..)| RayHit::Entity {
+            id,
+            cell,
+        })
+}
+
+/// The target after `current` among `candidates` (id, distance): nearest first, then farther, wrapping. A
+/// `current` not among them restarts at the nearest.
+pub fn nearest_cycle(current: Option<u32>, candidates: &[(u32, i32)]) -> Option<u32> {
+    let key = |&(id, dist): &(u32, i32)| (dist, id);
+    let first = candidates.iter().min_by_key(|c| key(c)).map(|c| c.0);
+    let Some(after) = current.and_then(|id| candidates.iter().find(|c| c.0 == id)) else {
+        return first;
+    };
+    candidates
+        .iter()
+        .filter(|c| key(c) > key(after))
+        .min_by_key(|c| key(c))
+        .map(|c| c.0)
+        .or(first)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
