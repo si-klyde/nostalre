@@ -1,3 +1,4 @@
+pub mod aim;
 pub mod ailment;
 pub mod animation;
 pub mod app_state;

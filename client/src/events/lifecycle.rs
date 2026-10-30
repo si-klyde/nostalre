@@ -39,6 +39,7 @@ impl App {
                 self.windows.trade_window.reset_input();
                 self.game.pending_confirms.pending_trade_partner = None;
                 self.game.session.map_properties = MapProperties::default();
+                self.gamepad.clear_buff_lock();
                 self.game.combat.damage_numbers.combat_hidden = false;
                 self.game.pending_casts.pending_skill_target = None;
                 self.game.pending_casts.pending_skill = None;

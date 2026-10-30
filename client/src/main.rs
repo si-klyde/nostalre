@@ -479,6 +479,9 @@ impl App {
     }
 
     fn hovered_cell(&self) -> Option<(i32, i32)> {
+        if let Some(nostalre_game::aim::AimTarget::Cell(cell)) = self.gamepad.aim_target() {
+            return Some(cell);
+        }
         let (renderer, coords, screen_w, screen_h) = self.screen_dims()?;
         input::hovered_cell(
             self.input.mouse_position,

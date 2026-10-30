@@ -217,6 +217,11 @@ pub fn cures_silence(skill: SkillEnum, target: &Entity) -> bool {
         && target.health_state & crate::ailment::OPT2_SILENCE != 0
 }
 
+/// A skill cast on a dead player's corpse to bring them back.
+pub fn revives_corpse(skill: SkillEnum) -> bool {
+    skill == SkillEnum::AllResurrection
+}
+
 pub fn skill_target_allowed(
     class: TargetClass,
     target: &Entity,
