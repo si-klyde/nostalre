@@ -115,6 +115,8 @@ pub struct NpcShop {
     focus: Focus,
     /// The basket line the keys picked
     basket_pick: usize,
+    /// Where the picked line stands in the list, for when it leaves ([`NpcShop::keep_list_pick`])
+    list_pick: usize,
 }
 
 /// The basket line the keys picked, while a controller is in use
@@ -152,6 +154,7 @@ impl NpcShop {
             drag_all: true,
             focus: Focus::List,
             basket_pick: 0,
+            list_pick: 0,
         }
     }
 
@@ -798,12 +801,30 @@ impl NpcShop {
         }
     }
 
+    /// Selling all of a line takes it off the list: the pick stays where it was, on the line now there (the last
+    /// one, if it was the end), so the next key does not start over from the top
+    fn keep_list_pick(&mut self) {
+        let Some(index) = self.shop.selected_index else {
+            return;
+        };
+        let lines = self.list_indices();
+        if let Some(at) = lines.iter().position(|&line| line == index) {
+            self.list_pick = at;
+        } else if !lines.is_empty() {
+            self.list_pick = self.list_pick.min(lines.len() - 1);
+            self.shop.selected_index = Some(lines[self.list_pick]);
+            let rows = self.layout().input_rows;
+            keep_in_view(&mut self.scroll_offset, self.list_pick, rows);
+        }
+    }
+
     /// The keys, a controller's D-pad and buttons. Up/Down walk the list or the basket, Left/Right go between
     /// them, Down off the basket's end (or Right from the list with nothing in it) reaches the footer's buttons;
     /// Enter (A) moves the picked line across (asking the amount as a drag does) or presses the button. A
     /// controller's Start (Space while one is in use, so a keyboard's stray Space buys nothing) buys or sells
     /// from anywhere
     fn keys(&mut self, ui: &UiFrame, ctx: &BuildCtx, events: &mut Vec<GameEvent>) {
+        self.keep_list_pick();
         let c = &ui.ctx;
         let step = isize::from(c.key_down) - isize::from(c.key_up);
         let basket_len = self.shop.basket.len();
@@ -1055,6 +1076,7 @@ impl NpcShop {
         self.resize_start_rows = None;
         self.focus = Focus::List;
         self.basket_pick = 0;
+        self.list_pick = 0;
     }
 }
 
@@ -1342,6 +1364,55 @@ mod tests {
         assert!(
             matches!(events.as_slice(), [GameEvent::RequestNpcShopBuy { items }] if items == &vec![(2, 502)]),
             "Space (Start) buys the basket, got {events:?}"
+        );
+    }
+
+    #[test]
+    fn selling_a_whole_line_keeps_the_pick_where_it_was() {
+        let sell_line = |item_id, name| ShopSellItem {
+            item: buy_line(item_id, name).item,
+            price: 25,
+            overcharge_price: 25,
+        };
+        let mut shop_ui = NpcShop::new();
+        shop_ui.shop.open_sell(
+            100,
+            vec![
+                sell_line(501, "Red Potion"),
+                sell_line(502, "Orange Potion"),
+                sell_line(503, "Yellow Potion"),
+                sell_line(504, "White Potion"),
+            ],
+        );
+        let mut state = StateCache::new();
+        let mut character = Character::new();
+        let data = DataTable::new();
+        let mut frame = |shop_ui: &mut NpcShop, keys: fn(&mut UiContext)| {
+            let mut ui_ctx = UiContext::new(1024.0, 768.0);
+            keys(&mut ui_ctx);
+            let mut ui = test_frame(&mut ui_ctx, &mut state);
+            shop_ui.build(&mut ui, &mut crate::BuildCtx::test(&mut character, &data))
+        };
+
+        frame(&mut shop_ui, |c| c.key_down = true);
+        frame(&mut shop_ui, |c| c.key_down = true);
+        frame(&mut shop_ui, |c| c.key_enter = true);
+        assert_eq!(shop_ui.shop.basket.len(), 1);
+        frame(&mut shop_ui, |_| {});
+        assert_eq!(
+            shop_ui.shop.selected_index,
+            Some(2),
+            "the line after the one sold takes the pick"
+        );
+        frame(&mut shop_ui, |c| c.key_down = true);
+        assert_eq!(shop_ui.shop.selected_index, Some(3), "and the keys walk on");
+
+        frame(&mut shop_ui, |c| c.key_enter = true);
+        frame(&mut shop_ui, |_| {});
+        assert_eq!(
+            shop_ui.shop.selected_index,
+            Some(2),
+            "selling the last line picks the new last"
         );
     }
 
