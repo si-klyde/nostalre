@@ -1,8 +1,9 @@
 # nostalRE
 
 A native Renewal client for desktop and Android. Built with Rust and wgpu,
-with touch, controller, keyboard, and mouse input. Android app builds run the
-client and local servers together for offline play.
+with touch, controller, keyboard, and mouse input, plus an optional HD mode
+(scene lighting, shadows, water, grass). The Android app runs the client and
+local servers together for offline play, with a populated world.
 
 ![Rust](https://img.shields.io/badge/Rust-1.97.1-DEA584?style=flat&logo=rust&logoColor=white)
 ![wgpu](https://img.shields.io/badge/Rendering-wgpu_28-5E4AE3?style=flat)
@@ -11,8 +12,9 @@ client and local servers together for offline play.
 ![Protocol](https://img.shields.io/badge/Protocol-20250716-1976D2?style=flat)
 [![Based on nostalro-client](https://img.shields.io/badge/Based_on-nostalro--client-607D8B?style=flat)](https://github.com/nmeylan/nostalro-client)
 [![AI-assisted development](https://img.shields.io/badge/Development-AI--assisted-8E44AD?style=flat)](#ai-use-disclosure)
+[![Discord](https://img.shields.io/badge/Discord-Join-5865F2?style=flat&logo=discord&logoColor=white)](https://discord.gg/GarBcyCgD)
 
-**[Download test APK](https://github.com/si-klyde/nostalre-launcher/releases)** · [Install](#play-on-android) · [Contribute](#contributing) · [Credits](#attribution) · [License](#license) · [AI disclosure](#ai-use-disclosure)
+**[Download APK](https://github.com/si-klyde/nostalre-launcher/releases/latest)** · [Install](#play-on-android) · [Discord](https://discord.gg/GarBcyCgD) · [Contribute](#contributing) · [Credits](#attribution) · [License](#license) · [AI disclosure](#ai-use-disclosure)
 
 ![nostalRE gameplay on an Android handheld](docs/images/android-handheld.webp)
 
@@ -22,13 +24,14 @@ client and local servers together for offline play.
 
 ### Download
 
-Open **[nostalRE launcher's Releases](https://github.com/si-klyde/nostalre-launcher/releases)** and
-select the ARM64 `.apk` under a release's **Assets**. Read its notes for the
-build's status and known issues.
+Open the **[latest nostalRE launcher release](https://github.com/si-klyde/nostalre-launcher/releases/latest)** and
+select the ARM64 `.apk` under **Assets**. Its notes list what changed, the
+signing certificate, and the APK's SHA-256. New versions install over older
+ones and keep your characters.
 
 > [!NOTE]
-> Current APKs are debug-signed **test builds** published as pre-releases.
-> Expect bugs and missing features, and back up your game folder.
+> nostalRE is in early development. Expect bugs and missing features, and back
+> up your game folder.
 
 | You need | Requirement |
 | --- | --- |
@@ -43,18 +46,23 @@ build's status and known issues.
 4. Choose your local username, create or select a character, and play.
 
 The app runs its servers locally; no computer or separate server setup is
-needed for the APK. Optional `BGM/` music and loose `data/` overrides can stay
-in your game folder.
+needed for the APK. Server rates and helper NPCs are set in the app's
+**Settings**. For English text, tap *Install English text* on the character
+screen: the app downloads and converts the
+[ROenglishRE](https://github.com/llchrisll/ROenglishRE) translation without
+changing your game folder. Optional `BGM/` music and loose `data/` overrides
+can stay in your game folder.
 
 **Bring your own resources.** No original game archives, official client
 executables, or music are supplied in this repository or the APK. The photo
 above is documentation, not a bundled game-resource pack.
 
-### Report a problem
+### Get help or report a problem
 
-[Open an issue](https://github.com/si-klyde/nostalre/issues) with the APK
-version, device model, Android version, and reproduction steps. Include relevant
-logs or a recording when available.
+Ask questions and share feedback on [Discord](https://discord.gg/GarBcyCgD).
+For bugs, [open an issue](https://github.com/si-klyde/nostalre/issues) with the
+APK version, device model, Android version, and reproduction steps. Include
+relevant logs or a recording when available.
 
 ## Contributing
 
