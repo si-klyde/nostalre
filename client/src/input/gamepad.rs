@@ -117,7 +117,7 @@ enum Group {
     L1R1,
 }
 
-/// A set's twelve slots, in the order of the HUD: L1's four, L1+R1's, R1's, each Y, X, B, A
+/// A set's twelve slots, in the order of the bar: L1's four, R1's, L1+R1's, each Y, X, B, A
 fn hotbar_slot(group: Group, face: Button, set: u8) -> Option<usize> {
     let face = match face {
         Button::Y => 0,
@@ -128,8 +128,8 @@ fn hotbar_slot(group: Group, face: Button, set: u8) -> Option<usize> {
     };
     let group = match group {
         Group::L1 => 0,
-        Group::L1R1 => 1,
-        Group::R1 => 2,
+        Group::R1 => 1,
+        Group::L1R1 => 2,
     };
     Some(PAD_SET_SLOTS * set as usize + 4 * group + face)
 }
@@ -936,10 +936,11 @@ mod tests {
     #[test]
     fn three_sets_of_twelve_cover_the_four_rows() {
         assert_eq!(hotbar_slot(Group::L1, Button::Y, 0), Some(0));
-        assert_eq!(hotbar_slot(Group::L1R1, Button::Y, 0), Some(4));
-        assert_eq!(hotbar_slot(Group::R1, Button::A, 0), Some(11));
+        assert_eq!(hotbar_slot(Group::R1, Button::Y, 0), Some(4));
+        assert_eq!(hotbar_slot(Group::R1, Button::A, 0), Some(7));
+        assert_eq!(hotbar_slot(Group::L1R1, Button::Y, 0), Some(8));
         assert_eq!(hotbar_slot(Group::L1, Button::X, 1), Some(13));
-        assert_eq!(hotbar_slot(Group::R1, Button::A, 2), Some(35));
+        assert_eq!(hotbar_slot(Group::L1R1, Button::A, 2), Some(35));
         assert_eq!(hotbar_slot(Group::L1, Button::Start, 0), None);
     }
 

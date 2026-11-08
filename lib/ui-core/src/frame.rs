@@ -39,7 +39,12 @@ pub struct UiFrame<'a> {
     keyboard_owner: Option<WidgetId>,
     typing: bool,
     typing_tapped: bool,
+    /// The focused text field's line with its cursor, for the strip above an on-screen keyboard
+    typing_line: Option<String>,
 }
+
+/// Android's keyboard floats over the game and hides most fields, the chat line among them
+const SHOW_TYPING_LINE: bool = cfg!(target_os = "android");
 
 #[derive(Default)]
 pub struct UiOutput {
@@ -328,6 +333,7 @@ impl<'a> UiFrame<'a> {
             keyboard_owner,
             typing: false,
             typing_tapped: false,
+            typing_line: None,
         }
     }
 
@@ -825,6 +831,11 @@ impl<'a> UiFrame<'a> {
         if response.has_focus {
             self.typing(response.clicked);
             state.process_keys(self.ctx);
+            if SHOW_TYPING_LINE {
+                let mut line = state.display_text();
+                line.insert(state.display_cursor_offset(), '|');
+                self.typing_line = Some(line);
+            }
             self.state
                 .get_or_default::<KeyboardOwner>(KEYBOARD_OWNER_STATE_ID)
                 .0 = Some(id);
@@ -1055,7 +1066,37 @@ impl<'a> UiFrame<'a> {
         }
     }
 
-    pub fn finish(self) -> UiOutput {
+    /// What is being typed, in a strip along the top of the screen, over everything: its end when it does not fit
+    fn draw_typing_line(&mut self, line: &str) {
+        const PAD: f32 = 8.0;
+        let width = self.ctx.screen_width;
+        let mut shown = line;
+        while self.atlas.measure_text(shown) > width - PAD * 2.0 {
+            let mut chars = shown.chars();
+            chars.next();
+            shown = chars.as_str();
+        }
+        let height = self.atlas.line_height + PAD * 2.0;
+        let (vertices, indices) = draw::quad_vertices(0.0, 0.0, width, height, [0.0, 0.0, 0.0, 0.8]);
+        self.tooltip_draw_calls.push(DrawCall {
+            vertices: vertices.into(),
+            indices: indices.into(),
+            texture: TextureRef::White,
+        });
+        let baseline = PAD + self.atlas.ascent;
+        let (vertices, indices) =
+            draw::text_vertices(shown, PAD, baseline, [1.0, 1.0, 1.0, 1.0], self.atlas);
+        self.tooltip_draw_calls.push(DrawCall {
+            vertices: vertices.into(),
+            indices: indices.into(),
+            texture: TextureRef::FontAtlas,
+        });
+    }
+
+    pub fn finish(mut self) -> UiOutput {
+        if let Some(line) = self.typing_line.take() {
+            self.draw_typing_line(&line);
+        }
         UiOutput {
             draw_calls: self.draw_calls,
             tooltip_draw_calls: self.tooltip_draw_calls,
