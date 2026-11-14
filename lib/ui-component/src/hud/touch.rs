@@ -1,7 +1,7 @@
 //! The on-screen controls of a touch screen (the design canvas, "Touch HUD" and "Camera on controller and
 //! touch"): a move stick bottom left with the camera's turn buttons over it, Attack bottom right with four
-//! skills in an arc, three more slots beside them, the hotbar set, Sit over it while the player can sit; zoom and
-//! reset beside the minimap. Over the arc, while an NPC is in reach, a Talk button with its name.
+//! skills in an arc, three more slots beside them, the hotbar set, Sit over it while the player can sit; zoom,
+//! reset and Chat beside the minimap. Over the arc, while an NPC is in reach, a Talk button with its name.
 //!
 //! Several fingers work at once. A finger that lands on a control (and not on a window drawn over it) is the
 //! controls' until it lifts: the client never makes it the mouse (`touch_zones`), and only such fingers press
@@ -22,6 +22,7 @@ const ATTACK_ID: WidgetId = WidgetId(7016);
 const SET_ID: WidgetId = WidgetId(7017);
 const TALK_ID: WidgetId = WidgetId(7018);
 const SIT_ID: WidgetId = WidgetId(7019);
+const CHAT_ID: WidgetId = WidgetId(7027);
 /// The slot buttons: the arc's four, then the three beside it, 7020 to 7026
 const SLOT_BASE_ID: u32 = 7020;
 
@@ -116,6 +117,8 @@ pub struct TouchInput {
     pub talk: bool,
     /// Sit down, or stand up
     pub sit: bool,
+    /// Open the chat line, and the keyboard with it
+    pub chat: bool,
 }
 
 /// A finger the controls own, or the mouse while its button is down
@@ -135,6 +138,7 @@ struct Layout {
     zoom_in: Rect,
     zoom_out: Rect,
     reset: Rect,
+    chat: Rect,
     attack: Rect,
     set: Rect,
     slots: [Rect; SLOT_BUTTONS],
@@ -207,6 +211,7 @@ impl Layout {
             zoom_in: small(0.0),
             zoom_out: small(1.0),
             reset: small(2.0),
+            chat: small(3.0),
             attack: centred(ax, ay, ATTACK_SIZE),
             set,
             slots,
@@ -225,6 +230,7 @@ impl Layout {
             self.zoom_in,
             self.zoom_out,
             self.reset,
+            self.chat,
             self.attack,
             self.set,
         ];
@@ -305,6 +311,7 @@ impl TouchControls {
         let zoom_in = press(ui, ZOOM_IN_ID, layout.zoom_in);
         let zoom_out = press(ui, ZOOM_OUT_ID, layout.zoom_out);
         let reset = press(ui, RESET_ID, layout.reset);
+        let chat = press(ui, CHAT_ID, layout.chat);
         let sit = layout.sit.map(|r| (r, press(ui, SIT_ID, r)));
         let attack = press(ui, ATTACK_ID, layout.attack);
         let set = press(ui, SET_ID, layout.set);
@@ -320,6 +327,7 @@ impl TouchControls {
             (layout.zoom_in, zoom_in),
             (layout.zoom_out, zoom_out),
             (layout.reset, reset),
+            (layout.chat, chat),
             (layout.attack, attack),
             (layout.set, set),
         ]
@@ -356,6 +364,7 @@ impl TouchControls {
         Icon::Plus.draw(ui, layout.zoom_in);
         Icon::Minus.draw(ui, layout.zoom_out);
         Icon::Reset.draw(ui, layout.reset);
+        Icon::Chat.draw(ui, layout.chat);
         for (r, face) in layout.slots.iter().zip(&slots.faces) {
             if let Some(face) = face {
                 slot_icon(ui, *r, &face.icon);
@@ -389,6 +398,7 @@ impl TouchControls {
         out.turn = f32::from(turn_right.held) - f32::from(turn_left.held);
         out.zoom = f32::from(zoom_out.held) - f32::from(zoom_in.held);
         out.reset = reset.tapped;
+        out.chat = chat.tapped;
         out.attack = attack.tapped;
         out.sit = sit.is_some_and(|(_, p)| p.tapped);
         out.next_set = set.tapped;
@@ -546,6 +556,7 @@ enum Icon {
     Plus,
     Minus,
     Reset,
+    Chat,
 }
 
 impl Icon {
@@ -565,6 +576,13 @@ impl Icon {
             }
             Icon::Minus => bar(ui, cx - size / 2.0, cy - 1.0, size, 2.0),
             Icon::Reset => style::dot(ui, cx - size / 4.0, cy - size / 4.0, size / 2.0, false),
+            // a speech bubble: a rounded box, its tail down at the left
+            Icon::Chat => {
+                let (bw, bh) = (size * 1.4, size);
+                let (x, y) = ((cx - bw / 2.0).floor(), (cy - bh * 0.6).floor());
+                style::push_white(ui, draw::rounded_rect(x, y, bw, bh, bh * 0.3, style::TEXT));
+                bar(ui, x + bw * 0.2, y + bh - 1.0, bh * 0.3, bh * 0.35);
+            }
         }
     }
 }
@@ -644,5 +662,12 @@ mod tests {
         for r in &l.slots[4..] {
             assert!(r.y + r.h <= dock.y, "{r:?}");
         }
+    }
+
+    #[test]
+    fn chat_sits_under_reset() {
+        let l = layout();
+        assert_eq!(l.chat.x, l.reset.x);
+        assert_eq!(l.chat.y, l.reset.y + SMALL_SIZE + GAP);
     }
 }

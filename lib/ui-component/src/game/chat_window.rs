@@ -270,6 +270,12 @@ impl ChatWindow {
             .unwrap_or(DEFAULT_SIZE_INDEX)
     }
 
+    /// Opens the line with the input focused, as Enter does; the keyboard comes up (again, if put away)
+    pub fn open(&mut self) {
+        self.active = true;
+        self.pending_focus = true;
+    }
+
     pub fn is_active(&self) -> bool {
         self.active
     }
@@ -775,6 +781,11 @@ impl InGameWindow for ChatWindow {
             state.pos_y = screen_h - default_h - padding;
             state.initialized = true;
         }
+        // opened while hidden (the touch Chat button, a whisper): the line comes back, or it types blind
+        if state.size_index == 0 && self.active {
+            state.size_index = 1;
+            state.msg_area_h = SIZE_CYCLE[1];
+        }
 
         let size_index = state.size_index;
         let mut msg_area_h = state.msg_area_h;
@@ -1113,6 +1124,15 @@ impl InGameWindow for ChatWindow {
             .min(channel_bubble.x - INPUT_GAP);
         let msg_rect = Rect::new(msg_x, input_y, (msg_right - msg_x).max(20.0), input_h);
 
+        // A touch screen has no Enter to open the line: a tap on it does, and the tap brings the keyboard up
+        if !self.active
+            && ui.ctx.mouse_clicked
+            && ui.pointer_available()
+            && msg_rect.contains(ui.ctx.mouse_x, ui.ctx.mouse_y)
+        {
+            self.open();
+        }
+
         if self.active {
             let input_bg = if self.frameless {
                 crate::hud::style::underline(ui, whisper_rect);
@@ -1147,6 +1167,7 @@ impl InGameWindow for ChatWindow {
                 self.pending_focus = false;
                 self.focused_input = INPUT_ID;
                 ui.set_focus(INPUT_ID);
+                ui.typing(true);
             }
             if ui.ctx.key_tab && owns_keyboard {
                 self.focused_input = if self.focused_input == INPUT_ID {
@@ -2213,5 +2234,169 @@ mod tests {
         let focus = frame(&mut chat, &mut state, Some(&mut other), true, false);
         assert!(chat.active);
         assert_eq!(focus, Some(OTHER_INPUT_ID));
+    }
+
+    #[test]
+    fn a_tap_on_the_closed_line_opens_it_and_asks_for_the_keyboard() {
+        let mut chat = ChatWindow::new();
+        let mut character = Character::new();
+        let data = DataTable::new();
+        let mut state = StateCache::new();
+
+        let mut ctx = UiContext::new(800.0, 600.0);
+        let mut ui = test_frame(&mut ctx, &mut state);
+        chat.build(&mut ui, &mut crate::BuildCtx::test(&mut character, &data));
+        assert!(!chat.active);
+        let rect = chat.bounding_rect.unwrap();
+
+        let mut ctx = UiContext::new(800.0, 600.0);
+        ctx.mouse_x = rect.x + rect.w / 2.0;
+        ctx.mouse_y = rect.y + rect.h - INPUT_H / 2.0;
+        ctx.mouse_clicked = true;
+        ctx.mouse_down = true;
+        let mut ui = test_frame(&mut ctx, &mut state);
+        chat.build(&mut ui, &mut crate::BuildCtx::test(&mut character, &data));
+        assert_eq!(ui.focused(), Some(INPUT_ID));
+        let out = ui.finish();
+
+        assert!(chat.active, "the tap opens the line");
+        assert!(out.typing && out.typing_tapped, "and asks for the keyboard");
+        assert!(
+            !state
+                .get::<ChatWindowState>(CHAT_WINDOW_ID)
+                .unwrap()
+                .dragging,
+            "the tap does not grab the window"
+        );
+    }
+
+    #[test]
+    fn open_brings_the_keyboard_back_even_on_an_open_line() {
+        let mut chat = ChatWindow::new();
+        let mut character = Character::new();
+        let data = DataTable::new();
+        let mut state = StateCache::new();
+        for _ in 0..2 {
+            chat.open();
+            let mut ctx = UiContext::new(800.0, 600.0);
+            let mut ui = test_frame(&mut ctx, &mut state);
+            chat.build(&mut ui, &mut crate::BuildCtx::test(&mut character, &data));
+            assert_eq!(ui.focused(), Some(INPUT_ID));
+            let out = ui.finish();
+            assert!(chat.active && out.typing && out.typing_tapped);
+        }
+    }
+
+    /// One frame; `tap`: a click (finger down) at that point
+    fn tap_frame(
+        chat: &mut ChatWindow,
+        state: &mut StateCache,
+        tap: Option<(f32, f32)>,
+    ) -> nostalre_ui::frame::UiOutput {
+        let mut character = Character::new();
+        let data = DataTable::new();
+        let mut ctx = UiContext::new(800.0, 600.0);
+        if let Some((x, y)) = tap {
+            ctx.mouse_x = x;
+            ctx.mouse_y = y;
+            ctx.mouse_clicked = true;
+            ctx.mouse_down = true;
+        }
+        let mut ui = test_frame(&mut ctx, state);
+        chat.build(&mut ui, &mut crate::BuildCtx::test(&mut character, &data));
+        ui.finish()
+    }
+
+    fn line_point(chat: &ChatWindow) -> (f32, f32) {
+        let r = chat.bounding_rect.expect("the chat was drawn");
+        (r.x + r.w / 2.0, r.y + r.h - INPUT_H / 2.0)
+    }
+
+    #[test]
+    fn open_on_a_closed_chat_window_does_not_leave_it_typing_blind() {
+        // a chat window saved closed comes back at size 0 (game_state.rs): not drawn at all
+        let mut chat = ChatWindow::new();
+        chat.set_initial_size_index(0);
+        let mut state = StateCache::new();
+        tap_frame(&mut chat, &mut state, None);
+        assert!(chat.bounding_rect.is_none(), "size 0 draws nothing");
+
+        // the touch Chat button
+        chat.open();
+        let out = tap_frame(&mut chat, &mut state, None);
+
+        // Either the line really opens (keyboard up) or it stays closed. Active with no line on screen and no
+        // keyboard swallows unmodified keys and stops the player walking (movement.rs returns while active)
+        assert!(
+            !chat.active || out.typing,
+            "chat active but nothing drawn and no keyboard asked for (pending_focus={})",
+            chat.pending_focus
+        );
+    }
+
+    #[test]
+    fn a_tap_on_the_collapsed_line_opens_it() {
+        let mut chat = ChatWindow::new();
+        chat.set_initial_size_index(1);
+        let mut state = StateCache::new();
+        tap_frame(&mut chat, &mut state, None);
+        assert!(!chat.active);
+
+        let at = line_point(&chat);
+        let out = tap_frame(&mut chat, &mut state, Some(at));
+        assert!(chat.active);
+        assert!(out.typing && out.typing_tapped);
+    }
+
+    #[test]
+    fn a_tap_on_the_messages_does_not_open_the_line() {
+        let mut chat = ChatWindow::new();
+        let mut state = StateCache::new();
+        tap_frame(&mut chat, &mut state, None);
+        let r = chat.bounding_rect.unwrap();
+
+        let out = tap_frame(&mut chat, &mut state, Some((r.x + r.w / 2.0, r.y + 10.0)));
+        assert!(!chat.active, "only the line opens it");
+        assert!(!out.typing_tapped);
+    }
+
+    #[test]
+    fn a_tap_on_the_closed_line_under_another_window_does_not_open_it() {
+        const COVER_ID: WidgetId = WidgetId(9_999);
+        let mut chat = ChatWindow::new();
+        let mut state = StateCache::new();
+        let mut character = Character::new();
+        let data = DataTable::new();
+
+        // a window drawn over the whole chat, above it in the z-order
+        let mut cover = Rect::new(0.0, 0.0, 0.0, 0.0);
+        for _ in 0..2 {
+            let mut ctx = UiContext::new(800.0, 600.0);
+            let mut ui = test_frame(&mut ctx, &mut state);
+            let z = ui.get_z_order();
+            ui.compute_hovered_window(&z);
+            chat.build(&mut ui, &mut crate::BuildCtx::test(&mut character, &data));
+            cover = chat.bounding_rect.unwrap();
+            ui.ensure_in_z_order(COVER_ID);
+            ui.enter_window(COVER_ID, cover);
+            ui.finish();
+        }
+
+        let mut ctx = UiContext::new(800.0, 600.0);
+        ctx.mouse_x = cover.x + cover.w / 2.0;
+        ctx.mouse_y = cover.y + cover.h - INPUT_H / 2.0;
+        ctx.mouse_clicked = true;
+        ctx.mouse_down = true;
+        let mut ui = test_frame(&mut ctx, &mut state);
+        let z = ui.get_z_order();
+        assert_eq!(z.last(), Some(&COVER_ID), "the cover is on top");
+        ui.compute_hovered_window(&z);
+        chat.build(&mut ui, &mut crate::BuildCtx::test(&mut character, &data));
+        ui.ensure_in_z_order(COVER_ID);
+        ui.enter_window(COVER_ID, cover);
+        let out = ui.finish();
+
+        assert!(!chat.active, "the tap belongs to the window on top");
+        assert!(!out.typing_tapped);
     }
 }
