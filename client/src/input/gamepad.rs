@@ -587,6 +587,9 @@ impl App {
         if touch.sit {
             self.run_action(HotkeyAction::SitStand);
         }
+        if touch.chat {
+            self.windows.chat_window.open();
+        }
         if let Some(i) = touch.slot {
             let slot = self.windows.hud.input.touch_slots.slot(i);
             self.use_hotbar_slot(slot);
