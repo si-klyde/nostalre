@@ -1145,6 +1145,8 @@ impl ApplicationHandler for App {
                 let hover = self.resolve_hover(
                     hovered,
                     &pick_render_list,
+                    // waiting-room hosts are hidden NPCs: their boards stay clickable
+                    &render_list,
                     &floor_item_render_list,
                     ui_any_hovered,
                     ui_any_interactive,

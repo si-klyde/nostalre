@@ -66,6 +66,12 @@ const DETAIL_H: f32 = 375.0;
 const DETAIL_IMG_W: f32 = 90.0;
 const DETAIL_IMG_H: f32 = 60.0;
 const DESC_W: f32 = 300.0;
+const LINE_H: f32 = 14.0;
+/// Lines of the description the SUMMARY box holds, from y+154 to above OBJECTIVE.
+const DESC_LINES: usize = 7;
+/// The one-line goal in the OBJECTIVE box, above the monster rows.
+const GOAL_Y: f32 = 288.0;
+const GOAL_LINES: usize = 2;
 
 const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 const PANEL_BG: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
@@ -434,6 +440,7 @@ pub struct QuestDetailWindow {
     has_grf_textures: bool,
     quest_id: Option<u32>,
     wrapped_desc: Vec<String>,
+    wrapped_goal: Vec<String>,
     desc_source: u32,
 }
 
@@ -450,6 +457,7 @@ impl QuestDetailWindow {
             has_grf_textures: false,
             quest_id: None,
             wrapped_desc: Vec::new(),
+            wrapped_goal: Vec::new(),
             desc_source: u32::MAX,
         }
     }
@@ -466,6 +474,7 @@ impl QuestDetailWindow {
         self.quest_id = Some(quest_id);
         self.open = true;
         self.wrapped_desc.clear();
+        self.wrapped_goal.clear();
         self.desc_source = u32::MAX;
     }
 
@@ -573,33 +582,30 @@ impl InGameWindow for QuestDetailWindow {
 
         ui.text(x + 120.0, y + 70.0, &quest_title(data, id), TEXT);
 
+        // under the title, in the same box
         if let Some(end) = quest.end_time {
-            ui.text(x + 120.0, y + 68.0, &format_end_time(end), LABEL_COLOR);
+            ui.text(x + 120.0, y + 86.0, &format_end_time(end), LABEL_COLOR);
         }
-
-        let summary = data
-            .quest_display
-            .as_ref()
-            .map(|t| t.summary(id))
-            .unwrap_or_default();
-        ui.colored_text(x + 25.0, y + 154.0, &summary, TEXT);
 
         if self.desc_source != id {
-            let full = data
-                .quest_display
-                .as_ref()
-                .map(|t| t.description(id))
-                .unwrap_or_default();
-            self.wrapped_desc = word_wrap(
-                &full,
-                DESC_W,
-                |t| ui.atlas.measure_text(&strip_color_codes(t)),
-                false,
-            );
+            let display = data.quest_display.as_ref();
+            let wrap = |text: &str| {
+                word_wrap(
+                    text,
+                    DESC_W,
+                    |t| ui.atlas.measure_text(&strip_color_codes(t)),
+                    false,
+                )
+            };
+            self.wrapped_desc = wrap(&display.map(|t| t.description(id)).unwrap_or_default());
+            self.wrapped_goal = wrap(&display.map(|t| t.summary(id)).unwrap_or_default());
             self.desc_source = id;
         }
-        for (i, line) in self.wrapped_desc.iter().enumerate() {
-            ui.colored_text(x + 25.0, y + 160.0 + i as f32 * 14.0, line, TEXT);
+        for (i, line) in self.wrapped_desc.iter().take(DESC_LINES).enumerate() {
+            ui.colored_text(x + 25.0, y + 154.0 + i as f32 * LINE_H, line, TEXT);
+        }
+        for (i, line) in self.wrapped_goal.iter().take(GOAL_LINES).enumerate() {
+            ui.colored_text(x + 25.0, y + GOAL_Y + i as f32 * LINE_H, line, TEXT);
         }
 
         for (i, obj) in quest.objectives.iter().take(3).enumerate() {

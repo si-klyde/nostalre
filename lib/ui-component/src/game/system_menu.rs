@@ -171,7 +171,8 @@ impl Window for SystemMenu {
 
 impl InGameWindow for SystemMenu {
     fn owns_keyboard(&self, _ctx: &BuildCtx) -> bool {
-        self.open
+        // the death menu is mouse only: Enter still opens and sends chat (@revive, asking for help)
+        self.open && !(self.dead && self.pending_confirm == PendingConfirm::None)
     }
 
     fn wants_escape(&self, _ctx: &BuildCtx) -> bool {
@@ -730,5 +731,22 @@ mod tests {
         assert!(!menu.wants_escape(&ctx));
         assert!(menu.open);
         assert!(menu.dead);
+    }
+
+    #[test]
+    fn death_menu_leaves_the_keyboard_to_chat() {
+        let mut menu = SystemMenu::new();
+        let mut character = Character::new();
+        let data = DataTable::new();
+        let ctx = crate::BuildCtx::test(&mut character, &data);
+        menu.open_dead();
+        assert!(!menu.owns_keyboard(&ctx));
+        // its quit confirmation still takes the keyboard, like the normal menu
+        menu.pending_confirm = PendingConfirm::QuitGame;
+        assert!(menu.owns_keyboard(&ctx));
+        menu.pending_confirm = PendingConfirm::None;
+        menu.close_dead();
+        menu.open = true;
+        assert!(menu.owns_keyboard(&ctx));
     }
 }

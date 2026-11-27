@@ -87,7 +87,7 @@ pub struct QuestDisplay {
 }
 
 /// Parses `data/questid2display.txt`: a `#`-delimited stream of 6-field records
-/// `id # title # icon # image # summary # description`. Newlines inside a field
+/// `id # title # icon # image # description # summary`. Newlines inside a field
 /// are cosmetic and whole `//` lines are comments.
 pub fn parse_questid2display(data: &[u8]) -> HashMap<u32, QuestDisplay> {
     let content = decode_euc_kr(data);
@@ -112,8 +112,9 @@ pub fn parse_questid2display(data: &[u8]) -> HashMap<u32, QuestDisplay> {
                 title: chunk[1].trim().to_string(),
                 icon_name: chunk[2].trim().to_string(),
                 image_name: chunk[3].trim().to_string(),
-                summary: chunk[4].trim().to_string(),
-                description: chunk[5].trim().to_string(),
+                // the long text comes first, then the one-line goal ("Hunt 20 Zeroms")
+                description: chunk[4].trim().to_string(),
+                summary: chunk[5].trim().to_string(),
             },
         );
     }
@@ -800,16 +801,18 @@ ACCESSORY_HEADBAND = 6,
 
     #[test]
     fn parse_questid2display_records_skip_comments_keep_color_codes() {
-        let data = b"// header comment\n1000#First Quest#SG_FEEL#que_noimage#Summary one#\nHunt ^FF0000ten^000000 Porings.#\n2000#Second#ico_new#que_img#S2#D2#\n";
+        let data = b"// header comment\n1000#First Quest#SG_FEEL#que_noimage#Hunt ^FF0000ten^000000 Porings for the guard.#\nHunt 10 Porings#\n2000#Second#ico_new#que_img#D2#S2#\n";
         let table = parse_questid2display(data);
         assert_eq!(table.len(), 2);
         let q = table.get(&1000).unwrap();
         assert_eq!(q.title, "First Quest");
         assert_eq!(q.icon_name, "SG_FEEL");
         assert_eq!(q.image_name, "que_noimage");
-        assert_eq!(q.summary, "Summary one");
-        assert_eq!(q.description, "Hunt ^FF0000ten^000000 Porings.");
-        assert_eq!(table.get(&2000).unwrap().icon_name, "ico_new");
+        assert_eq!(q.description, "Hunt ^FF0000ten^000000 Porings for the guard.");
+        assert_eq!(q.summary, "Hunt 10 Porings");
+        let q2 = table.get(&2000).unwrap();
+        assert_eq!(q2.icon_name, "ico_new");
+        assert_eq!((q2.description.as_str(), q2.summary.as_str()), ("D2", "S2"));
     }
 
     #[test]
