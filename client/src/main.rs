@@ -1335,6 +1335,8 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     // in packet dispatch is caught there and only drops the packet
     let report = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        // the default report goes to stderr, which Android drops: client.log is what a player can export
+        tracing::error!("{info}");
         report(info);
         if !nostalre_network::panic_is_guarded() {
             std::process::exit(1);
