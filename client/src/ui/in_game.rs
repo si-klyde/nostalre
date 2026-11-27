@@ -126,7 +126,8 @@ pub fn build_in_game_ui(
     }
 
     // a dialog the server opens (an NPC, an invitation, death) comes before the menu, which reads raw keys
-    if !windows.hud.is_modern() || other_modal {
+    // (the death menu leaves the keyboard to chat, so it counts here by itself)
+    if !windows.hud.is_modern() || other_modal || windows.system_menu.dead {
         windows.menu.close();
     }
     if windows.menu.is_open() && windows.chat_window.is_active() {

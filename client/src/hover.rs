@@ -2,11 +2,31 @@ use crate::App;
 use crate::game_state::{HoverState, attackable_unit_at};
 use nostalre_game::aim::AimTarget;
 use nostalre_game::app_state::AppState;
+use nostalre_game::chat_room::ChatRoomRegistry;
 use nostalre_game::cursor::{
     CompanionSkillTarget, CursorType, PendingSkillTarget, RenderEntry, cursor_type_for_cell,
     hovered_entity_cursor_type,
 };
 use nostalre_game::targeting::{TargetClass, skill_target_class};
+
+/// The chat room whose board is under `mouse`. `owners` must hold every drawn actor, hidden ones too: a script
+/// hides the NPC that hosts a waiting room (the Knight, Crusader and Sage job quests) and only its board shows.
+fn chat_room_at(
+    mouse: (f32, f32),
+    rooms: &ChatRoomRegistry,
+    owners: &[RenderEntry],
+) -> Option<u32> {
+    let (mx, my) = mouse;
+    // the overlay paints boards in this same order: the last hit is the one on top
+    rooms
+        .iter()
+        .filter_map(|room| {
+            let entry = owners.iter().find(|e| e.id == room.owner_aid)?;
+            let r = crate::overlay::chat_room_board_rect(entry);
+            (mx >= r[0] && mx <= r[2] && my >= r[1] && my <= r[3]).then_some(room.room_id)
+        })
+        .last()
+}
 
 impl App {
     pub(crate) fn update_grid_hover(&mut self) -> Option<(i32, i32)> {
@@ -84,26 +104,16 @@ impl App {
             .map(|(&aid, _)| aid)
     }
 
-    fn hovered_chat_room(&self, render_list: &[RenderEntry]) -> Option<u32> {
+    fn hovered_chat_room(&self, room_owners: &[RenderEntry]) -> Option<u32> {
         let (mx, my) = self.input.mouse_position;
-        let (mx, my) = (mx as f32, my as f32);
-        for room in self.game.chat_rooms.iter() {
-            let entry = match render_list.iter().find(|e| e.id == room.owner_aid) {
-                Some(e) => e,
-                None => continue,
-            };
-            let r = crate::overlay::chat_room_board_rect(entry);
-            if mx >= r[0] && mx <= r[2] && my >= r[1] && my <= r[3] {
-                return Some(room.room_id);
-            }
-        }
-        None
+        chat_room_at((mx as f32, my as f32), &self.game.chat_rooms, room_owners)
     }
 
     pub(crate) fn resolve_hover(
         &self,
         hovered_cell: Option<(i32, i32)>,
         render_list: &[RenderEntry],
+        room_owners: &[RenderEntry],
         floor_item_render_list: &[RenderEntry],
         ui_any_hovered: bool,
         ui_any_interactive_hovered: bool,
@@ -164,7 +174,7 @@ impl App {
                     hovered_entity_cursor_type(mouse, entities, render_list, map, Some(class))
                         .map(|(_, id)| id);
             } else if self.game.pending_casts.pending_skill_target.is_none() {
-                if let Some(room_id) = self.hovered_chat_room(render_list) {
+                if let Some(room_id) = self.hovered_chat_room(room_owners) {
                     hover.hovered_chat_room = Some(room_id);
                 } else if let Some(vendor_id) = self.hovered_vending_board(render_list) {
                     hover.hovered_vending = Some(vendor_id);
@@ -215,5 +225,137 @@ impl App {
         }
 
         hover
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nostalre_game::chat_room::ChatRoom;
+    use nostalre_game::cursor::RenderEntryKind;
+
+    fn owner(id: u32) -> RenderEntry {
+        RenderEntry {
+            kind: RenderEntryKind::Entity,
+            id,
+            screen_anchor: [400.0, 300.0],
+            depth: 0.5,
+            depth_gradient: [0.0, 0.0],
+            flat_depth_gradient: [0.0, 0.0],
+            camera_dir: 0,
+            sprite_scale: 1.0,
+            pick_bounds: [350.0, 200.0, 450.0, 300.0],
+            head_offset: 100.0,
+        }
+    }
+
+    fn rooms() -> ChatRoomRegistry {
+        let mut rooms = ChatRoomRegistry::new();
+        rooms.upsert(ChatRoom {
+            room_id: 7,
+            owner_aid: 110,
+            title: "Waiting Room".into(),
+            cur_count: 0,
+            max_count: 20,
+            atype: 1,
+        });
+        rooms
+    }
+
+    fn board_center(entry: &RenderEntry) -> (f32, f32) {
+        let r = crate::overlay::chat_room_board_rect(entry);
+        ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0)
+    }
+
+    #[test]
+    fn board_of_a_drawn_owner_picks_its_room() {
+        let owners = [owner(110)];
+        assert_eq!(
+            chat_room_at(board_center(&owners[0]), &rooms(), &owners),
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn cursor_off_the_board_picks_nothing() {
+        assert_eq!(chat_room_at((0.0, 0.0), &rooms(), &[owner(110)]), None);
+    }
+
+    #[test]
+    fn room_without_its_owner_in_the_list_picks_nothing() {
+        let other = owner(999);
+        assert_eq!(chat_room_at(board_center(&other), &rooms(), &[other]), None);
+    }
+
+    #[test]
+    fn hidden_host_absent_from_pick_list_still_picks_from_the_drawn_list() {
+        // what main.rs passes: the full drawn list, where the hidden waiting-room NPC still sits
+        let host = owner(110);
+        let pick_list: [RenderEntry; 0] = [];
+        let drawn = [host];
+        let at = board_center(&host);
+        assert_eq!(chat_room_at(at, &rooms(), &pick_list), None);
+        assert_eq!(chat_room_at(at, &rooms(), &drawn), Some(7));
+    }
+
+    #[test]
+    fn board_edges_are_inclusive_and_one_pixel_out_misses() {
+        let host = owner(110);
+        let r = crate::overlay::chat_room_board_rect(&host);
+        let owners = [host];
+        assert_eq!(chat_room_at((r[0], r[1]), &rooms(), &owners), Some(7));
+        assert_eq!(chat_room_at((r[2], r[3]), &rooms(), &owners), Some(7));
+        assert_eq!(chat_room_at((r[0] - 1.0, r[1]), &rooms(), &owners), None);
+        assert_eq!(chat_room_at((r[2], r[3] + 1.0), &rooms(), &owners), None);
+    }
+
+    #[test]
+    fn each_board_picks_its_own_room_among_several() {
+        let mut registry = rooms();
+        registry.upsert(ChatRoom {
+            room_id: 8,
+            owner_aid: 220,
+            title: "Second".into(),
+            cur_count: 1,
+            max_count: 5,
+            atype: 1,
+        });
+        let a = owner(110);
+        let mut b = owner(220);
+        b.screen_anchor = [100.0, 500.0];
+        b.pick_bounds = [50.0, 400.0, 150.0, 500.0];
+        let owners = [a, b];
+        assert_eq!(chat_room_at(board_center(&a), &registry, &owners), Some(7));
+        assert_eq!(chat_room_at(board_center(&b), &registry, &owners), Some(8));
+    }
+
+    #[test]
+    fn overlapping_boards_pick_the_one_painted_on_top() {
+        // overlay::build_chat_room_boards paints rooms in `rooms.iter()` order, so the last one covers the rest
+        let mut registry = rooms();
+        registry.upsert(ChatRoom {
+            room_id: 8,
+            owner_aid: 220,
+            title: "Second".into(),
+            cur_count: 1,
+            max_count: 5,
+            atype: 1,
+        });
+        let a = owner(110);
+        let mut b = owner(220);
+        b.screen_anchor[0] += 10.0;
+        let owners = [a, b];
+        let on_top = registry.iter().last().unwrap().room_id;
+        let shared = {
+            let (ra, rb) = (
+                crate::overlay::chat_room_board_rect(&a),
+                crate::overlay::chat_room_board_rect(&b),
+            );
+            (
+                (ra[2].min(rb[2]) + ra[0].max(rb[0])) / 2.0,
+                (ra[1] + ra[3]) / 2.0,
+            )
+        };
+        assert_eq!(chat_room_at(shared, &registry, &owners), Some(on_top));
     }
 }
