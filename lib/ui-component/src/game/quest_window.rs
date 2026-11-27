@@ -699,4 +699,92 @@ mod tests {
             "expected toggle-active event, got {events:?}"
         );
     }
+
+    /// Top edge of every text mesh the detail window draws for quest 500 with this display record.
+    fn detail_text_tops(description: &str, summary: &str) -> Vec<f32> {
+        use nostalre_formats::lua_table::QuestDisplay;
+        use nostalre_game::data_table::quest_display_table::QuestDisplayTable;
+        use std::collections::HashMap;
+
+        let mut log = QuestLog::default();
+        log.replace(vec![Quest {
+            id: 500,
+            active: true,
+            end_time: None,
+            objectives: vec![],
+        }]);
+        let mut data = DataTable::new();
+        data.quest_display = Some(QuestDisplayTable::from_entries(HashMap::from([(
+            500,
+            QuestDisplay {
+                title: "T".into(),
+                icon_name: String::new(),
+                image_name: String::new(),
+                summary: summary.into(),
+                description: description.into(),
+            },
+        )])));
+        let mut win = QuestDetailWindow::new();
+        win.open(500);
+        let mut character = Character::new();
+        let mut state = StateCache::new();
+        let mut ctx = UiContext::new(1024.0, 768.0);
+        let mut ui = test_frame(&mut ctx, &mut state);
+        let mut build_ctx = crate::BuildCtx::test(&mut character, &data);
+        build_ctx.quest_log = &log;
+        win.build(&mut ui, &mut build_ctx);
+        ui.draw_calls
+            .iter()
+            .filter(|c| matches!(c.texture, TextureRef::FontAtlas))
+            .map(|c| {
+                c.vertices
+                    .iter()
+                    .map(|v| v.position[1])
+                    .fold(f32::MAX, f32::min)
+            })
+            .collect()
+    }
+
+    fn added_tops(with: &[f32], without: &[f32]) -> Vec<f32> {
+        with.iter()
+            .copied()
+            .filter(|y| !without.iter().any(|w| (w - y).abs() < 0.01))
+            .collect()
+    }
+
+    #[test]
+    fn description_fills_the_summary_box_and_goal_sits_in_the_objective_box() {
+        let base = detail_text_tops("", "");
+        let desc = added_tops(&detail_text_tops("Zz", ""), &base);
+        let goal = added_tops(&detail_text_tops("", "Zz"), &base);
+        assert_eq!(desc.len(), 1, "description lines drawn: {desc:?}");
+        assert_eq!(goal.len(), 1, "goal lines drawn: {goal:?}");
+        assert!(
+            ((goal[0] - desc[0]) - (GOAL_Y - 154.0)).abs() < 0.01,
+            "goal {goal:?} vs description {desc:?}"
+        );
+    }
+
+    #[test]
+    fn a_long_description_stops_above_the_goal() {
+        let base = detail_text_tops("", "");
+        let goal = added_tops(&detail_text_tops("", "Zz"), &base);
+        let many = ["Zz"; 12].join("\n");
+        let desc = added_tops(&detail_text_tops(&many, ""), &base);
+        assert_eq!(desc.len(), DESC_LINES);
+        assert!(
+            desc.iter().all(|&y| y + LINE_H <= goal[0]),
+            "{desc:?} vs goal {goal:?}"
+        );
+    }
+
+    #[test]
+    fn reopening_on_another_quest_rewraps_its_text() {
+        let mut win = QuestDetailWindow::new();
+        win.wrapped_goal = vec!["stale".into()];
+        win.desc_source = 500;
+        win.open(501);
+        assert!(win.wrapped_goal.is_empty() && win.wrapped_desc.is_empty());
+        assert_eq!(win.desc_source, u32::MAX);
+    }
 }

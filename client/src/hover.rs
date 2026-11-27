@@ -17,11 +17,15 @@ fn chat_room_at(
     owners: &[RenderEntry],
 ) -> Option<u32> {
     let (mx, my) = mouse;
-    rooms.iter().find_map(|room| {
-        let entry = owners.iter().find(|e| e.id == room.owner_aid)?;
-        let r = crate::overlay::chat_room_board_rect(entry);
-        (mx >= r[0] && mx <= r[2] && my >= r[1] && my <= r[3]).then_some(room.room_id)
-    })
+    // the overlay paints boards in this same order: the last hit is the one on top
+    rooms
+        .iter()
+        .filter_map(|room| {
+            let entry = owners.iter().find(|e| e.id == room.owner_aid)?;
+            let r = crate::overlay::chat_room_board_rect(entry);
+            (mx >= r[0] && mx <= r[2] && my >= r[1] && my <= r[3]).then_some(room.room_id)
+        })
+        .last()
 }
 
 impl App {
@@ -281,5 +285,77 @@ mod tests {
     fn room_without_its_owner_in_the_list_picks_nothing() {
         let other = owner(999);
         assert_eq!(chat_room_at(board_center(&other), &rooms(), &[other]), None);
+    }
+
+    #[test]
+    fn hidden_host_absent_from_pick_list_still_picks_from_the_drawn_list() {
+        // what main.rs passes: the full drawn list, where the hidden waiting-room NPC still sits
+        let host = owner(110);
+        let pick_list: [RenderEntry; 0] = [];
+        let drawn = [host];
+        let at = board_center(&host);
+        assert_eq!(chat_room_at(at, &rooms(), &pick_list), None);
+        assert_eq!(chat_room_at(at, &rooms(), &drawn), Some(7));
+    }
+
+    #[test]
+    fn board_edges_are_inclusive_and_one_pixel_out_misses() {
+        let host = owner(110);
+        let r = crate::overlay::chat_room_board_rect(&host);
+        let owners = [host];
+        assert_eq!(chat_room_at((r[0], r[1]), &rooms(), &owners), Some(7));
+        assert_eq!(chat_room_at((r[2], r[3]), &rooms(), &owners), Some(7));
+        assert_eq!(chat_room_at((r[0] - 1.0, r[1]), &rooms(), &owners), None);
+        assert_eq!(chat_room_at((r[2], r[3] + 1.0), &rooms(), &owners), None);
+    }
+
+    #[test]
+    fn each_board_picks_its_own_room_among_several() {
+        let mut registry = rooms();
+        registry.upsert(ChatRoom {
+            room_id: 8,
+            owner_aid: 220,
+            title: "Second".into(),
+            cur_count: 1,
+            max_count: 5,
+            atype: 1,
+        });
+        let a = owner(110);
+        let mut b = owner(220);
+        b.screen_anchor = [100.0, 500.0];
+        b.pick_bounds = [50.0, 400.0, 150.0, 500.0];
+        let owners = [a, b];
+        assert_eq!(chat_room_at(board_center(&a), &registry, &owners), Some(7));
+        assert_eq!(chat_room_at(board_center(&b), &registry, &owners), Some(8));
+    }
+
+    #[test]
+    fn overlapping_boards_pick_the_one_painted_on_top() {
+        // overlay::build_chat_room_boards paints rooms in `rooms.iter()` order, so the last one covers the rest
+        let mut registry = rooms();
+        registry.upsert(ChatRoom {
+            room_id: 8,
+            owner_aid: 220,
+            title: "Second".into(),
+            cur_count: 1,
+            max_count: 5,
+            atype: 1,
+        });
+        let a = owner(110);
+        let mut b = owner(220);
+        b.screen_anchor[0] += 10.0;
+        let owners = [a, b];
+        let on_top = registry.iter().last().unwrap().room_id;
+        let shared = {
+            let (ra, rb) = (
+                crate::overlay::chat_room_board_rect(&a),
+                crate::overlay::chat_room_board_rect(&b),
+            );
+            (
+                (ra[2].min(rb[2]) + ra[0].max(rb[0])) / 2.0,
+                (ra[1] + ra[3]) / 2.0,
+            )
+        };
+        assert_eq!(chat_room_at(shared, &registry, &owners), Some(on_top));
     }
 }

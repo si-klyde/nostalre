@@ -825,4 +825,30 @@ ACCESSORY_HEADBAND = 6,
         assert!(set.contains(&4003));
         assert!(!set.contains(&9999));
     }
+
+    #[test]
+    fn parse_questid2display_real_layout_empty_goal_keeps_next_record_aligned() {
+        // shape of the shipped file: each field on its own line, some goals empty
+        let data = b"1#Ransom#SG_FEEL#QUE_NOIMAGE#\nTurtle#\nCarapace#\n\n101#Introduction to the Professor#SG_FEEL#QUE_NOIMAGE#\nhead up to the Great Hall and speak to the professor.#\n#\n\n102#Looking for Instructors#SG_FEEL#QUE_NOIMAGE#\nLook for the Battle Instructor.\nThen take their classes.#\nTalk to 3 instructors#\n";
+        let table = parse_questid2display(data);
+        assert_eq!(table.len(), 3);
+        let q1 = &table[&1];
+        assert_eq!(
+            (q1.description.as_str(), q1.summary.as_str()),
+            ("Turtle", "Carapace")
+        );
+        let q101 = &table[&101];
+        assert_eq!(
+            q101.description,
+            "head up to the Great Hall and speak to the professor."
+        );
+        assert_eq!(q101.summary, "");
+        let q102 = &table[&102];
+        assert_eq!(q102.title, "Looking for Instructors");
+        assert_eq!(
+            q102.description,
+            "Look for the Battle Instructor.\nThen take their classes."
+        );
+        assert_eq!(q102.summary, "Talk to 3 instructors");
+    }
 }

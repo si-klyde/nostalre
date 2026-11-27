@@ -749,4 +749,61 @@ mod tests {
         menu.open = true;
         assert!(menu.owns_keyboard(&ctx));
     }
+
+    #[test]
+    fn death_menu_quit_click_takes_the_keyboard_and_cancel_hands_it_back() {
+        let mut menu = SystemMenu::new();
+        menu.open_dead();
+        let mut state = StateCache::new();
+        let mut character = Character::new();
+        let data = DataTable::new();
+
+        // Restart, CharSelect, Quit
+        let (mx, my) = button_center(600.0, 3, 2);
+        let mut ctx = UiContext::new(800.0, 600.0);
+        ctx.mouse_x = mx;
+        ctx.mouse_y = my;
+        ctx.mouse_clicked = true;
+        let mut ui = test_frame(&mut ctx, &mut state);
+        let events = menu.build(&mut ui, &mut crate::BuildCtx::test(&mut character, &data));
+        assert!(events.is_empty());
+        assert_eq!(menu.pending_confirm, PendingConfirm::QuitGame);
+        assert!(menu.owns_keyboard(&crate::BuildCtx::test(&mut character, &data)));
+
+        let mut ctx = UiContext::new(800.0, 600.0);
+        let dialog_w: f32 = 220.0;
+        let dialog_h: f32 = 40.0;
+        let dx = ((800.0 - dialog_w) / 2.0).floor();
+        let dy = ((600.0 - dialog_h) / 2.0).floor();
+        let btn_w = 42.0;
+        let btn_h = 20.0;
+        ctx.mouse_x = dx + dialog_w - 5.0 - btn_w + btn_w / 2.0;
+        ctx.mouse_y = dy + dialog_h - 4.0 - btn_h + btn_h / 2.0;
+        ctx.mouse_clicked = true;
+        let mut ui = test_frame(&mut ctx, &mut state);
+        let events = menu.build(&mut ui, &mut crate::BuildCtx::test(&mut character, &data));
+        assert!(events.is_empty());
+        assert!(menu.open && menu.dead);
+        assert!(!menu.owns_keyboard(&crate::BuildCtx::test(&mut character, &data)));
+    }
+
+    #[test]
+    fn death_menu_ignores_enter_and_escape_keys() {
+        let mut menu = SystemMenu::new();
+        menu.open_dead();
+        let mut state = StateCache::new();
+        let mut character = Character::new();
+        let data = DataTable::new();
+        let mut ctx = UiContext::new(800.0, 600.0);
+        ctx.key_enter = true;
+        ctx.key_escape = true;
+        let mut ui = test_frame(&mut ctx, &mut state);
+        let events = menu.build(&mut ui, &mut crate::BuildCtx::test(&mut character, &data));
+        assert!(
+            events.is_empty(),
+            "keys leaked into the death menu: {events:?}"
+        );
+        assert!(menu.open && menu.dead);
+        assert_eq!(menu.pending_confirm, PendingConfirm::None);
+    }
 }

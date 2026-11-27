@@ -530,4 +530,48 @@ mod tests {
         assert!(harness.pending_casts.pending_skill_target.is_none());
         assert!(windows.guild_window.is_open());
     }
+
+    #[test]
+    fn the_death_menu_lets_enter_reach_the_chat_line() {
+        let mut windows = Windows::new();
+        let mut state = StateCache::new();
+        let mut harness = Harness::new();
+        windows.system_menu.open_dead();
+        assert!(harness.press_enter_reaches_chat(&mut windows, &mut state));
+    }
+
+    #[test]
+    fn a_modal_over_the_death_menu_still_keeps_enter_from_the_chat_line() {
+        let mut windows = Windows::new();
+        let mut state = StateCache::new();
+        let mut harness = Harness::new();
+        windows.system_menu.open_dead();
+        windows.confirm_dialog.show_confirm("Accept party invite?");
+        assert!(!harness.press_enter_reaches_chat(&mut windows, &mut state));
+    }
+
+    #[test]
+    fn the_normal_system_menu_still_keeps_enter_from_the_chat_line() {
+        let mut windows = classic_windows();
+        let mut state = StateCache::new();
+        let mut harness = Harness::new();
+        windows.system_menu.open = true;
+        assert!(!harness.press_enter_reaches_chat(&mut windows, &mut state));
+        // death then resurrect: the flag clears and the plain menu claims the keyboard again
+        windows.system_menu.open_dead();
+        windows.system_menu.close_dead();
+        windows.system_menu.open = true;
+        assert!(!harness.press_enter_reaches_chat(&mut windows, &mut state));
+    }
+
+    #[test]
+    fn escape_while_dead_opens_no_menu_over_the_death_menu() {
+        let mut windows = Windows::new();
+        let mut state = StateCache::new();
+        let mut harness = Harness::new();
+        windows.system_menu.open_dead();
+        harness.press_escape(&mut windows, &mut state);
+        assert!(!windows.menu.is_open());
+        assert!(windows.system_menu.open && windows.system_menu.dead);
+    }
 }
